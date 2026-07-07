@@ -123,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
             spec = load_json(args.spec)
             readouts = load_json(args.readouts)
             ensure_valid(validate_audit_spec(spec))
-            ensure_valid(validate_readouts(readouts))
+            ensure_valid(validate_readouts(readouts, spec))
             report = score_readouts(spec, readouts, top_k=args.top_k)
             write_json(args.json_out, report)
             Path(args.out).parent.mkdir(parents=True, exist_ok=True)
