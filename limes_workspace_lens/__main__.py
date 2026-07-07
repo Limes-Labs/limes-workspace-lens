@@ -8,6 +8,7 @@ from .analysis import render_markdown_report, score_readouts
 from .comparison import compare_reports, render_markdown_comparison
 from .examples import example_spec
 from .intervention import build_intervention_plan
+from .manifest import build_manifest, parse_metadata, validate_manifest
 from .reflection import build_reflection_rows
 from .schema import (
     ensure_valid,
@@ -68,6 +69,21 @@ def main(argv: list[str] | None = None) -> int:
     compare.add_argument("--after", required=True)
     compare.add_argument("--out", required=True, help="Markdown comparison path.")
     compare.add_argument("--json-out", required=True, help="Machine-readable comparison path.")
+
+    build_manifest_parser = subparsers.add_parser(
+        "build-manifest", help="Build a SHA256 artifact manifest."
+    )
+    build_manifest_parser.add_argument("files", nargs="+")
+    build_manifest_parser.add_argument("--root", default=".")
+    build_manifest_parser.add_argument("--out", required=True)
+    build_manifest_parser.add_argument("--command", dest="manifest_commands", action="append", default=[])
+    build_manifest_parser.add_argument("--metadata", action="append", default=[])
+
+    validate_manifest_parser = subparsers.add_parser(
+        "validate-manifest", help="Validate a SHA256 artifact manifest."
+    )
+    validate_manifest_parser.add_argument("manifest")
+    validate_manifest_parser.add_argument("--root", default=None)
 
     args = parser.parse_args(argv)
 
@@ -133,6 +149,23 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.out).parent.mkdir(parents=True, exist_ok=True)
             Path(args.out).write_text(render_markdown_comparison(comparison), encoding="utf-8")
             print(args.out)
+            return 0
+        if args.command == "build-manifest":
+            manifest = build_manifest(
+                args.files,
+                root=args.root,
+                commands=args.manifest_commands,
+                metadata=parse_metadata(args.metadata),
+            )
+            write_json(args.out, manifest)
+            print(args.out)
+            return 0
+        if args.command == "validate-manifest":
+            manifest = load_json(args.manifest)
+            root = args.root if args.root is not None else Path(args.manifest).resolve().parent
+            errors = validate_manifest(manifest, root=root)
+            ensure_valid(errors)
+            print(f"valid: {args.manifest}")
             return 0
     except Exception as exc:
         print(str(exc), file=sys.stderr)
