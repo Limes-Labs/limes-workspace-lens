@@ -30,12 +30,14 @@ For each checkpoint, preserve:
 - hardware and runtime note;
 - behavior-eval outputs for the same prompts when applicable.
 - evidence bundle tying readouts, behavior, controls, command logs, and status gates together.
+- artifact manifest with SHA256 hashes for every file above.
 
 For before/after comparisons, preserve:
 
 - both audit reports;
 - comparison JSON;
 - comparison Markdown;
+- artifact manifest covering both reports and comparison outputs;
 - note explaining whether lens settings were compatible.
 
 ## Recommended Suites

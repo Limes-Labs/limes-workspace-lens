@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +65,27 @@ def validate_audit_spec(spec: dict[str, Any]) -> list[str]:
         if key in spec and not isinstance(spec[key], dict):
             errors.append(f"spec.{key}: must be an object")
 
+    if isinstance(spec.get("project"), dict):
+        errors.extend(
+            _require_non_empty_strings(spec["project"], ["name", "owner"], "spec.project")
+        )
+    if isinstance(spec.get("model"), dict):
+        errors.extend(
+            _require_non_empty_strings(
+                spec["model"], ["name", "family", "checkpoint"], "spec.model"
+            )
+        )
+    if isinstance(spec.get("lens"), dict):
+        errors.extend(_require_non_empty_strings(spec["lens"], ["source"], "spec.lens"))
+        for key in ["fit_prompt_count", "sequence_length", "top_k"]:
+            if key in spec["lens"] and not _is_positive_int(spec["lens"][key]):
+                errors.append(f"spec.lens.{key}: must be a positive integer")
+        layer_range = spec["lens"].get("workspace_layer_range")
+        if layer_range is not None and not _is_layer_range(layer_range):
+            errors.append("spec.lens.workspace_layer_range: must be a two-item increasing integer list")
+
     prompts = spec.get("prompts")
+    prompt_ids: set[str] = set()
     if not isinstance(prompts, list) or not prompts:
         errors.append("spec.prompts: must be a non-empty list")
     else:
@@ -76,12 +97,16 @@ def validate_audit_spec(spec: dict[str, Any]) -> list[str]:
                 continue
             errors.extend(require_keys(prompt, ["id", "kind", "text"], where))
             prompt_id = prompt.get("id")
-            if isinstance(prompt_id, str):
+            if isinstance(prompt_id, str) and prompt_id:
                 if prompt_id in seen:
                     errors.append(f"{where}.id: duplicate prompt id {prompt_id!r}")
                 seen.add(prompt_id)
+                prompt_ids.add(prompt_id)
             else:
-                errors.append(f"{where}.id: must be a string")
+                errors.append(f"{where}.id: must be a non-empty string")
+            for key in ["kind", "text"]:
+                if not isinstance(prompt.get(key), str) or not prompt.get(key, "").strip():
+                    errors.append(f"{where}.{key}: must be a non-empty string")
             if "expected_workspace_terms" in prompt and not _is_string_list(
                 prompt["expected_workspace_terms"]
             ):
@@ -92,8 +117,8 @@ def validate_audit_spec(spec: dict[str, Any]) -> list[str]:
         for name, terms in audit_terms.items():
             if not isinstance(name, str) or not name:
                 errors.append("spec.audit_terms: category names must be non-empty strings")
-            if not _is_string_list(terms):
-                errors.append(f"spec.audit_terms.{name}: must be a list of strings")
+            if not _is_string_list(terms) or not terms:
+                errors.append(f"spec.audit_terms.{name}: must be a non-empty list of strings")
 
     reflection = spec.get("reflection_training")
     if reflection is not None:
@@ -113,16 +138,29 @@ def validate_audit_spec(spec: dict[str, Any]) -> list[str]:
                     errors.append(f"{where}: must be an object")
                     continue
                 errors.extend(require_keys(intervention, ["id", "prompt_id", "kind"], where))
+                for key in ["id", "prompt_id", "kind"]:
+                    if not isinstance(intervention.get(key), str) or not intervention.get(
+                        key, ""
+                    ).strip():
+                        errors.append(f"{where}.{key}: must be a non-empty string")
+                prompt_id = intervention.get("prompt_id")
+                if isinstance(prompt_id, str) and prompt_ids and prompt_id not in prompt_ids:
+                    errors.append(f"{where}.prompt_id: unknown prompt id {prompt_id!r}")
 
     return errors
 
 
-def validate_readouts(readouts: dict[str, Any]) -> list[str]:
-    errors = require_keys(readouts, ["schema_version", "readouts"], "readouts")
+def validate_readouts(readouts: dict[str, Any], spec: dict[str, Any] | None = None) -> list[str]:
+    errors = require_keys(readouts, ["schema_version", "source", "synthetic", "readouts"], "readouts")
     if readouts.get("schema_version") != READOUT_SCHEMA:
         errors.append(
             f"readouts: schema_version must be {READOUT_SCHEMA!r}, got {readouts.get('schema_version')!r}"
         )
+    if not isinstance(readouts.get("source"), str) or not readouts.get("source", "").strip():
+        errors.append("readouts.source: must be a non-empty string")
+    if not isinstance(readouts.get("synthetic"), bool):
+        errors.append("readouts.synthetic: must be a boolean")
+    known_prompt_ids = _prompt_ids(spec)
     rows = readouts.get("readouts")
     if not isinstance(rows, list) or not rows:
         errors.append("readouts.readouts: must be a non-empty list")
@@ -133,22 +171,94 @@ def validate_readouts(readouts: dict[str, Any]) -> list[str]:
             errors.append(f"{where}: must be an object")
             continue
         errors.extend(require_keys(row, ["prompt_id", "position", "layer", "top_tokens"], where))
-        if not isinstance(row.get("layer"), int):
+        prompt_id = row.get("prompt_id")
+        if not isinstance(prompt_id, str) or not prompt_id:
+            errors.append(f"{where}.prompt_id: must be a non-empty string")
+        elif known_prompt_ids and prompt_id not in known_prompt_ids:
+            errors.append(f"{where}.prompt_id: unknown prompt id {prompt_id!r}")
+        if not isinstance(row.get("position"), (str, int)) or isinstance(row.get("position"), bool):
+            errors.append(f"{where}.position: must be a string or integer")
+        if not isinstance(row.get("layer"), int) or isinstance(row.get("layer"), bool):
             errors.append(f"{where}.layer: must be an integer")
         top_tokens = row.get("top_tokens")
         if not isinstance(top_tokens, list) or not top_tokens:
             errors.append(f"{where}.top_tokens: must be a non-empty list")
             continue
+        ranks: set[int] = set()
         for token_index, token in enumerate(top_tokens):
             token_where = f"{where}.top_tokens[{token_index}]"
             if not isinstance(token, dict):
                 errors.append(f"{token_where}: must be an object")
                 continue
             errors.extend(require_keys(token, ["token", "rank"], token_where))
-            if not isinstance(token.get("token"), str):
-                errors.append(f"{token_where}.token: must be a string")
-            if not isinstance(token.get("rank"), int):
-                errors.append(f"{token_where}.rank: must be an integer")
+            if not isinstance(token.get("token"), str) or not token.get("token", "").strip():
+                errors.append(f"{token_where}.token: must be a non-empty string")
+            rank = token.get("rank")
+            if not isinstance(rank, int) or isinstance(rank, bool) or rank <= 0:
+                errors.append(f"{token_where}.rank: must be a positive integer")
+            elif rank in ranks:
+                errors.append(f"{token_where}.rank: duplicate rank {rank}")
+            else:
+                ranks.add(rank)
+            for numeric_key in ["score", "logit", "probability"]:
+                if numeric_key in token and not _is_finite_number(token[numeric_key]):
+                    errors.append(
+                        f"{token_where}.{numeric_key}: must be a finite number when present"
+                    )
+    return errors
+
+
+def validate_report(report: dict[str, Any]) -> list[str]:
+    errors = require_keys(
+        report,
+        ["schema_version", "project", "model", "lens", "input_readouts", "top_k", "prompt_summaries"],
+        "report",
+    )
+    if report.get("schema_version") != REPORT_SCHEMA:
+        errors.append(
+            f"report: schema_version must be {REPORT_SCHEMA!r}, got {report.get('schema_version')!r}"
+        )
+    for key in ["project", "model", "lens", "input_readouts"]:
+        if key in report and not isinstance(report[key], dict):
+            errors.append(f"report.{key}: must be an object")
+    top_k = report.get("top_k")
+    if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0:
+        errors.append("report.top_k: must be a positive integer")
+    category_counts = report.get("category_counts", {})
+    if category_counts is not None:
+        if not isinstance(category_counts, dict):
+            errors.append("report.category_counts: must be an object")
+        else:
+            for category, count in category_counts.items():
+                if not isinstance(category, str):
+                    errors.append("report.category_counts: category names must be strings")
+                if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                    errors.append(f"report.category_counts.{category}: must be a non-negative integer")
+    prompt_summaries = report.get("prompt_summaries")
+    if not isinstance(prompt_summaries, list) or not prompt_summaries:
+        errors.append("report.prompt_summaries: must be a non-empty list")
+    else:
+        seen: set[str] = set()
+        for index, row in enumerate(prompt_summaries):
+            where = f"report.prompt_summaries[{index}]"
+            if not isinstance(row, dict):
+                errors.append(f"{where}: must be an object")
+                continue
+            errors.extend(require_keys(row, ["prompt_id", "status"], where))
+            prompt_id = row.get("prompt_id")
+            if not isinstance(prompt_id, str) or not prompt_id:
+                errors.append(f"{where}.prompt_id: must be a non-empty string")
+            elif prompt_id in seen:
+                errors.append(f"{where}.prompt_id: duplicate prompt id {prompt_id!r}")
+            else:
+                seen.add(prompt_id)
+            for count_key in ["expected_workspace_term_hits", "audit_term_hits"]:
+                if count_key in row and (
+                    not isinstance(row[count_key], int)
+                    or isinstance(row[count_key], bool)
+                    or row[count_key] < 0
+                ):
+                    errors.append(f"{where}.{count_key}: must be a non-negative integer")
     return errors
 
 
@@ -159,3 +269,45 @@ def ensure_valid(errors: list[str]) -> None:
 
 def _is_string_list(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _is_positive_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _is_finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
+def _is_layer_range(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) == 2
+        and all(isinstance(item, int) and not isinstance(item, bool) for item in value)
+        and value[0] <= value[1]
+    )
+
+
+def _require_non_empty_strings(data: dict[str, Any], keys: list[str], where: str) -> list[str]:
+    errors: list[str] = []
+    for key in keys:
+        if not isinstance(data.get(key), str) or not data.get(key, "").strip():
+            errors.append(f"{where}.{key}: must be a non-empty string")
+    return errors
+
+
+def _prompt_ids(spec: dict[str, Any] | None) -> set[str]:
+    if not spec:
+        return set()
+    prompts = spec.get("prompts")
+    if not isinstance(prompts, list):
+        return set()
+    return {
+        prompt["id"]
+        for prompt in prompts
+        if isinstance(prompt, dict) and isinstance(prompt.get("id"), str)
+    }

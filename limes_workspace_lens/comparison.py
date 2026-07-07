@@ -7,7 +7,13 @@ from typing import Any
 COMPARISON_SCHEMA = "limes-workspace-lens/comparison.v0.1"
 
 
-def compare_reports(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+def compare_reports(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    compatibility_errors: list[str] | None = None,
+    allow_incompatible: bool = False,
+) -> dict[str, Any]:
     before_counts = _counts(before)
     after_counts = _counts(after)
     categories = sorted(set(before_counts) | set(after_counts))
@@ -43,6 +49,10 @@ def compare_reports(before: dict[str, Any], after: dict[str, Any]) -> dict[str, 
         "generated_utc": datetime.now(timezone.utc).isoformat(),
         "before": _identity(before),
         "after": _identity(after),
+        "compatibility": {
+            "status": _compatibility_status(compatibility_errors or [], allow_incompatible),
+            "errors": compatibility_errors or [],
+        },
         "category_deltas": category_deltas,
         "prompt_deltas": prompt_deltas,
         "interpretation": [
@@ -64,11 +74,24 @@ def render_markdown_comparison(comparison: dict[str, Any]) -> str:
         f"- Before: `{before.get('label', 'before')}`",
         f"- After: `{after.get('label', 'after')}`",
         "",
+        "## Compatibility",
+        "",
+        f"- Status: `{comparison.get('compatibility', {}).get('status', 'unknown')}`",
+    ]
+    compatibility_errors = comparison.get("compatibility", {}).get("errors", [])
+    if compatibility_errors:
+        lines.extend(["", "| Incompatibility |", "| --- |"])
+        for error in compatibility_errors:
+            lines.append(f"| {error} |")
+    lines.extend(
+        [
+            "",
         "## Category Deltas",
         "",
         "| Category | Before | After | Delta |",
         "| --- | ---: | ---: | ---: |",
-    ]
+        ]
+    )
     for row in comparison.get("category_deltas", []):
         lines.append(f"| `{row['category']}` | {row['before']} | {row['after']} | {row['delta']} |")
 
@@ -93,6 +116,54 @@ def render_markdown_comparison(comparison: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def compatibility_errors(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    if before.get("top_k") != after.get("top_k"):
+        errors.append(f"top_k differs: before={before.get('top_k')!r}, after={after.get('top_k')!r}")
+
+    before_prompts = {row.get("prompt_id") for row in before.get("prompt_summaries", [])}
+    after_prompts = {row.get("prompt_id") for row in after.get("prompt_summaries", [])}
+    if before_prompts != after_prompts:
+        errors.append(
+            "prompt suite differs: "
+            f"only_before={sorted(before_prompts - after_prompts)}, "
+            f"only_after={sorted(after_prompts - before_prompts)}"
+        )
+
+    before_categories = set(before.get("category_counts", {}).keys())
+    after_categories = set(after.get("category_counts", {}).keys())
+    if before_categories != after_categories:
+        errors.append(
+            "audit categories differ: "
+            f"only_before={sorted(before_categories - after_categories)}, "
+            f"only_after={sorted(after_categories - before_categories)}"
+        )
+
+    before_lens = before.get("lens", {})
+    after_lens = after.get("lens", {})
+    for key in ["source", "workspace_layer_range", "top_k"]:
+        if before_lens.get(key) != after_lens.get(key):
+            errors.append(
+                f"lens.{key} differs: before={before_lens.get(key)!r}, after={after_lens.get(key)!r}"
+            )
+
+    before_model = before.get("model", {})
+    after_model = after.get("model", {})
+    if before_model.get("family") != after_model.get("family"):
+        errors.append(
+            f"model.family differs: before={before_model.get('family')!r}, after={after_model.get('family')!r}"
+        )
+
+    before_readouts = before.get("input_readouts", {})
+    after_readouts = after.get("input_readouts", {})
+    if before_readouts.get("synthetic") != after_readouts.get("synthetic"):
+        errors.append(
+            "input_readouts.synthetic differs: "
+            f"before={before_readouts.get('synthetic')!r}, after={after_readouts.get('synthetic')!r}"
+        )
+    return errors
+
+
 def _counts(report: dict[str, Any]) -> dict[str, int]:
     return {key: int(value) for key, value in report.get("category_counts", {}).items()}
 
@@ -108,3 +179,11 @@ def _identity(report: dict[str, Any]) -> dict[str, Any]:
         "lens": lens.get("source", "unknown"),
         "readout_source": readouts.get("source", "unknown"),
     }
+
+
+def _compatibility_status(errors: list[str], allow_incompatible: bool) -> str:
+    if not errors:
+        return "compatible"
+    if allow_incompatible:
+        return "incompatible-allowed"
+    return "incompatible"

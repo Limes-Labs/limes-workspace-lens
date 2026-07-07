@@ -26,7 +26,7 @@ The checked-in fixture is only for CI and onboarding. Serious model claims requi
 - `scripts/export_jlens_readouts.py` - optional wrapper that applies a fitted `jlens` lens and exports the Limes readout schema.
 - `examples/` - a starter audit spec and a synthetic readout artifact for smoke tests.
 - `tests/` - unit and CLI workflow coverage.
-- `docs/` - trainer workflow, artifact schema, non-claims, and roadmap.
+- `docs/` - trainer workflow, artifact schema, non-claims, completion plan, and roadmap.
 - `results/` - reserved for committed real result cards and machine-readable audit artifacts.
 - `UPSTREAMS.md` - source trail, license notes, and reuse boundary.
 
@@ -54,6 +54,18 @@ python3 -m limes_workspace_lens summarize-readouts examples/synthetic_readouts.j
   --spec examples/workspace_audit_spec.json \
   --out runs/workspace-audit-card.md \
   --json-out runs/workspace-audit-card.json
+```
+
+Build and validate an artifact manifest:
+
+```bash
+python3 -m limes_workspace_lens build-manifest \
+  runs/workspace-audit-card.md \
+  runs/workspace-audit-card.json \
+  --root . \
+  --out runs/artifact-manifest.json \
+  --command "python3 -m limes_workspace_lens summarize-readouts ..."
+python3 -m limes_workspace_lens validate-manifest runs/artifact-manifest.json --root .
 ```
 
 Compare two checkpoint reports:
@@ -136,6 +148,10 @@ git diff --check
 ```
 
 For real model runs, also preserve the fitted lens artifact, readout JSON, audit card, exact command log, model revision, lens revision, compute manifest, behavior/control artifacts, and a validated evidence bundle.
+
+## Completion Plan
+
+The production-quality target is tracked in `docs/system-completion-plan.md`. It names the missing components, focused PR order, and acceptance gates for moving from v0.1 scaffold to a real model-development workbench.
 
 ## Sources
 

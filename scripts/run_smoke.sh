@@ -23,15 +23,30 @@ python3 -m limes_workspace_lens compare-reports \
   --after "${TMP_DIR}/audit-card.json" \
   --out "${TMP_DIR}/comparison.md" \
   --json-out "${TMP_DIR}/comparison.json"
+python3 -m limes_workspace_lens build-manifest \
+  "${TMP_DIR}/prompts.jsonl" \
+  "${TMP_DIR}/audit-card.md" \
+  "${TMP_DIR}/audit-card.json" \
+  "${TMP_DIR}/reflection.jsonl" \
+  "${TMP_DIR}/intervention-plan.json" \
+  "${TMP_DIR}/comparison.md" \
+  "${TMP_DIR}/comparison.json" \
+  --root "${TMP_DIR}" \
+  --out "${TMP_DIR}/artifact-manifest.json" \
+  --command "./scripts/run_smoke.sh" \
+  --metadata evidence_status=synthetic-fixture
+python3 -m limes_workspace_lens validate-manifest "${TMP_DIR}/artifact-manifest.json" --root "${TMP_DIR}"
 python3 - "${TMP_DIR}" <<'PY'
 import json
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
-for name in ["audit-card.json", "intervention-plan.json", "comparison.json"]:
+for name in ["audit-card.json", "intervention-plan.json", "comparison.json", "artifact-manifest.json"]:
     json.loads((root / name).read_text(encoding="utf-8"))
 assert (root / "reflection.jsonl").read_text(encoding="utf-8").count("\n") == 9
 assert "Workspace Lens" in (root / "comparison.md").read_text(encoding="utf-8")
 PY
-git diff --check
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git diff --check
+fi
