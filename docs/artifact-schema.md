@@ -136,6 +136,65 @@ The manifest records:
 
 Validation fails when a file is missing, has changed size, has changed SHA256, duplicates a manifest path, or escapes the declared manifest root. Manifests store `root` as `.` for portability; `validate-manifest` uses the manifest file's directory by default, or an explicit `--root` when provided.
 
+## Evidence Bundle
+
+Schema: `limes-workspace-lens/evidence-bundle.v0.1`
+
+Generated or hand-authored after the readout report, behavior checks, controls, command log, and compute manifest are preserved.
+
+Validate with:
+
+```bash
+python3 -m limes_workspace_lens validate-bundle results/run/evidence-bundle.json \
+  --root results/run \
+  --strict
+```
+
+Top-level required keys:
+
+- `bundle_id`: stable run or review identifier.
+- `status`: `diagnostic`, `mixed`, `negative`, or `verified`.
+- `claim`: question, hypothesis, interpretation, claim scope, and non-claims.
+- `compatibility`: model checkpoint, tokenizer revision, lens source/revision, prompt-suite hash, top-k, layer policy, position policy, and fit procedure.
+- `artifacts`: referenced audit spec, readouts, report, behavior/control files, command log, compute manifest, and lens identity.
+- `pairings`: prompt-level links from readout artifact to behavior and control artifacts.
+- `status_gates`: boolean gates such as `replayed`, `preserved`, `behavior_linked`, `control_backed`, and `compatible_settings`.
+- `missing_evidence`: structured list of evidence not yet available.
+- `conflicting_findings`: structured list of conflicts for mixed results.
+- `review`: reviewer, review time, limitations, and promotion recommendation.
+
+Artifact records require:
+
+- `id`
+- `kind`
+- `path`
+- `schema_version`
+- `required_for_status`
+
+For `verified` bundles, every artifact required for the status must include `sha256`, and `--strict` must be used so the validator can check paths, hashes, non-synthetic readouts, prompt coverage, and compatibility objects.
+
+Recommended artifact `kind` values:
+
+- `audit_spec`
+- `prompt_export`
+- `readouts`
+- `audit_report_json`
+- `audit_report_markdown`
+- `comparison_json`
+- `comparison_markdown`
+- `behavior_eval`
+- `control_eval`
+- `command_log`
+- `compute_manifest`
+- `lens_artifact_or_revision`
+
+Status-specific rules:
+
+- `diagnostic`: requires audit spec, readouts, and audit report; claim scope must be `hypothesis_generation`; missing evidence must be listed; promotion is disallowed.
+- `mixed`: requires behavior and control artifacts; conflicting findings must be listed; at least one pairing must use a conflict relation.
+- `negative`: requires behavior and controls; at least one behavior/control gate must fail.
+- `verified`: requires behavior and controls, command log, compute manifest, lens identity, preserved hashes, non-synthetic readouts, prompt coverage, and all verified gates passing.
+
 ## Counterfactual Reflection Data
 
 Schema: `limes-workspace-lens/reflection-jsonl.v0.1`
