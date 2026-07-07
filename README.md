@@ -183,6 +183,16 @@ git diff --check
 
 For real model runs, also preserve the fitted lens artifact, readout JSON, audit card, exact command log, model revision, lens revision, compute manifest, behavior/control artifacts, and a validated evidence bundle.
 
+Validate support artifacts directly while assembling a run:
+
+```bash
+python3 -m limes_workspace_lens validate-command-log runs/command-log.json
+python3 -m limes_workspace_lens validate-compute-manifest runs/compute-manifest.json
+python3 -m limes_workspace_lens validate-lens-artifact runs/lens-identity.json
+```
+
+See [SECURITY.md](SECURITY.md) before publishing command logs or evidence bundles.
+
 ## Completion Plan
 
 The production-quality target is tracked in `docs/system-completion-plan.md`. It names the missing components, focused PR order, and acceptance gates for moving from v0.1 scaffold to a real model-development workbench.

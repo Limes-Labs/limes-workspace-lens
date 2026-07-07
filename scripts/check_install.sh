@@ -36,6 +36,9 @@ install_and_smoke() {
   mkdir -p "${run_dir}"
   cd "${run_dir}"
   "${venv_dir}/bin/limes-workspace-lens" --help >/dev/null
+  "${venv_dir}/bin/limes-workspace-lens" validate-command-log --help >/dev/null
+  "${venv_dir}/bin/limes-workspace-lens" validate-compute-manifest --help >/dev/null
+  "${venv_dir}/bin/limes-workspace-lens" validate-lens-artifact --help >/dev/null
   "${venv_dir}/bin/limes-workspace-lens" init-spec --out spec.json
   "${venv_dir}/bin/limes-workspace-lens" validate-spec spec.json
   "${venv_dir}/bin/limes-workspace-lens" export-prompts spec.json --out prompts.jsonl

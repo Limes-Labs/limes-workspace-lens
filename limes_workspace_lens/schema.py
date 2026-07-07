@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any
 
 
@@ -14,6 +16,59 @@ CONTROL_EVAL_SCHEMA = "limes-workspace-lens/control-eval.v0.1"
 CONTROL_EVAL_KINDS = {"random_direction", "neutral_token", "no_op", "prompt_variant"}
 REFLECTION_SCHEMA = "limes-workspace-lens/reflection-jsonl.v0.1"
 INTERVENTION_SCHEMA = "limes-workspace-lens/intervention-plan.v0.1"
+COMMAND_LOG_SCHEMA = "limes-workspace-lens/command-log.v0.1"
+COMPUTE_MANIFEST_SCHEMA = "limes-workspace-lens/compute-manifest.v0.1"
+LENS_ARTIFACT_SCHEMA = "limes-workspace-lens/lens-artifact.v0.1"
+
+SECRET_KEY_NAMES = {
+    "access_token",
+    "api_key",
+    "apikey",
+    "auth_token",
+    "authorization",
+    "client_secret",
+    "credential",
+    "credentials",
+    "hf_token",
+    "openai_api_key",
+    "password",
+    "private_key",
+    "secret",
+}
+REDACTED_VALUES = {"", "<redacted>", "redacted", "***", "null", "none"}
+SECRET_VALUE_PATTERNS = [
+    re.compile(r"\bBearer\s+[A-Za-z0-9._=-]{8,}"),
+    re.compile(r"\bAuthorization:\s*(?:Bearer|token)\s+[A-Za-z0-9._=-]{8,}", re.IGNORECASE),
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    re.compile(r"\bAIza[0-9A-Za-z_-]{20,}\b"),
+    re.compile(r"\bhf_[A-Za-z0-9]{16,}\b"),
+    re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}\b"),
+    re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{12,}\b"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(
+        r"\b(?:HF_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|WANDB_API_KEY|AWS_SECRET_ACCESS_KEY)"
+        r"\s*=\s*(?!<redacted|\$|\$\{|<env:|REDACTED|\*\*\*)\S+",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"[?&](?:token|api_key|access_token)="
+        r"(?!<redacted|\$|\$\{|<env:|REDACTED|\*\*\*)[^&\s]+",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"--(?:token|api-key|password|secret)(?:=|\s+)"
+        r"(?!<redacted|\$|\$\{|<env:|REDACTED|\*\*\*)\S+",
+        re.IGNORECASE,
+    ),
+]
+ABSOLUTE_LOCAL_PATH_PATTERN = re.compile(
+    r"(^|[\s:='\"])(/Users/|/home/|/private/|/var/folders/|/Volumes/|~[/\\]|file://|\\\\|[A-Za-z]:\\)"
+)
+LENS_IDENTITY_KINDS = {"revision", "artifact", "adapter"}
+MUTABLE_REVISION_LABELS = {"head", "latest", "main", "master", "trunk"}
 
 
 class ValidationError(ValueError):
@@ -351,6 +406,166 @@ def validate_control_eval(
     return errors
 
 
+def validate_command_log(artifact: dict[str, Any]) -> list[str]:
+    errors = require_keys(
+        artifact,
+        ["schema_version", "generated_utc", "compatibility", "redaction", "commands"],
+        "command_log",
+    )
+    if artifact.get("schema_version") != COMMAND_LOG_SCHEMA:
+        errors.append(
+            "command_log: schema_version must be "
+            f"{COMMAND_LOG_SCHEMA!r}, got {artifact.get('schema_version')!r}"
+        )
+    _validate_generated_utc(artifact.get("generated_utc"), "command_log", errors)
+    _validate_compatibility_object(artifact.get("compatibility"), "command_log", errors)
+
+    redaction = artifact.get("redaction")
+    if not isinstance(redaction, dict):
+        errors.append("command_log.redaction: must be an object")
+    else:
+        errors.extend(
+            require_keys(redaction, ["secrets_redacted", "rules"], "command_log.redaction")
+        )
+        if redaction.get("secrets_redacted") is not True:
+            errors.append("command_log.redaction.secrets_redacted: must be true")
+        if not _is_string_list(redaction.get("rules")) or not redaction.get("rules"):
+            errors.append("command_log.redaction.rules: must be a non-empty list of strings")
+
+    commands = artifact.get("commands")
+    if not isinstance(commands, list) or not commands:
+        errors.append("command_log.commands: must be a non-empty list")
+    else:
+        seen: set[str] = set()
+        for index, command in enumerate(commands):
+            where = f"command_log.commands[{index}]"
+            if not isinstance(command, dict):
+                errors.append(f"{where}: must be an object")
+                continue
+            errors.extend(require_keys(command, ["id", "purpose", "command", "cwd", "exit_code"], where))
+            command_id = command.get("id")
+            if not isinstance(command_id, str) or not command_id.strip():
+                errors.append(f"{where}.id: must be a non-empty string")
+            elif command_id in seen:
+                errors.append(f"{where}.id: duplicate command id {command_id!r}")
+            else:
+                seen.add(command_id)
+            for key in ["purpose", "command"]:
+                if not isinstance(command.get(key), str) or not command.get(key, "").strip():
+                    errors.append(f"{where}.{key}: must be a non-empty string")
+            if not _safe_relative_path(command.get("cwd")):
+                errors.append(f"{where}.cwd: must be a safe relative path")
+            exit_code = command.get("exit_code")
+            if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+                errors.append(f"{where}.exit_code: must be an integer")
+            if "started_utc" in command:
+                _validate_iso_datetime(command.get("started_utc"), where, "started_utc", errors)
+            if "finished_utc" in command:
+                _validate_iso_datetime(command.get("finished_utc"), where, "finished_utc", errors)
+            if "environment" in command and not isinstance(command.get("environment"), dict):
+                errors.append(f"{where}.environment: must be an object when present")
+
+    errors.extend(_validate_public_artifact_strings(artifact, "command_log"))
+    return errors
+
+
+def validate_compute_manifest(artifact: dict[str, Any]) -> list[str]:
+    errors = require_keys(
+        artifact,
+        ["schema_version", "generated_utc", "runtime", "hardware", "dependencies"],
+        "compute_manifest",
+    )
+    if artifact.get("schema_version") != COMPUTE_MANIFEST_SCHEMA:
+        errors.append(
+            "compute_manifest: schema_version must be "
+            f"{COMPUTE_MANIFEST_SCHEMA!r}, got {artifact.get('schema_version')!r}"
+        )
+    _validate_generated_utc(artifact.get("generated_utc"), "compute_manifest", errors)
+
+    runtime = artifact.get("runtime")
+    if not isinstance(runtime, dict):
+        errors.append("compute_manifest.runtime: must be an object")
+    else:
+        errors.extend(require_keys(runtime, ["python", "platform"], "compute_manifest.runtime"))
+        errors.extend(
+            _require_non_empty_strings(runtime, ["python", "platform"], "compute_manifest.runtime")
+        )
+
+    hardware = artifact.get("hardware")
+    if not isinstance(hardware, dict):
+        errors.append("compute_manifest.hardware: must be an object")
+    else:
+        errors.extend(require_keys(hardware, ["accelerator", "device_count"], "compute_manifest.hardware"))
+        if not isinstance(hardware.get("accelerator"), str) or not hardware.get(
+            "accelerator", ""
+        ).strip():
+            errors.append("compute_manifest.hardware.accelerator: must be a non-empty string")
+        device_count = hardware.get("device_count")
+        if not isinstance(device_count, int) or isinstance(device_count, bool) or device_count < 0:
+            errors.append("compute_manifest.hardware.device_count: must be a non-negative integer")
+
+    dependencies = artifact.get("dependencies")
+    if not isinstance(dependencies, dict) or not dependencies:
+        errors.append("compute_manifest.dependencies: must be a non-empty object")
+    else:
+        for name, version in dependencies.items():
+            if not isinstance(name, str) or not name.strip():
+                errors.append("compute_manifest.dependencies: dependency names must be non-empty strings")
+            if not isinstance(version, str) or not version.strip():
+                errors.append(f"compute_manifest.dependencies.{name}: must be a non-empty string")
+
+    if "compatibility" in artifact:
+        _validate_compatibility_object(artifact.get("compatibility"), "compute_manifest", errors)
+    if "resource_limits" in artifact and not isinstance(artifact.get("resource_limits"), dict):
+        errors.append("compute_manifest.resource_limits: must be an object when present")
+    if "notes" in artifact and not _is_string_list(artifact.get("notes")):
+        errors.append("compute_manifest.notes: must be a list of strings when present")
+
+    errors.extend(_validate_public_artifact_strings(artifact, "compute_manifest"))
+    return errors
+
+
+def validate_lens_artifact(artifact: dict[str, Any]) -> list[str]:
+    errors = require_keys(
+        artifact,
+        ["schema_version", "generated_utc", "compatibility", "lens"],
+        "lens_artifact",
+    )
+    if artifact.get("schema_version") != LENS_ARTIFACT_SCHEMA:
+        errors.append(
+            "lens_artifact: schema_version must be "
+            f"{LENS_ARTIFACT_SCHEMA!r}, got {artifact.get('schema_version')!r}"
+        )
+    _validate_generated_utc(artifact.get("generated_utc"), "lens_artifact", errors)
+    _validate_compatibility_object(artifact.get("compatibility"), "lens_artifact", errors)
+
+    lens = artifact.get("lens")
+    if not isinstance(lens, dict):
+        errors.append("lens_artifact.lens: must be an object")
+    else:
+        errors.extend(
+            require_keys(lens, ["identity_kind", "source", "revision"], "lens_artifact.lens")
+        )
+        if lens.get("identity_kind") not in LENS_IDENTITY_KINDS:
+            errors.append(
+                "lens_artifact.lens.identity_kind: must be one of "
+                f"{sorted(LENS_IDENTITY_KINDS)}"
+            )
+        errors.extend(_require_non_empty_strings(lens, ["source", "revision"], "lens_artifact.lens"))
+        if "artifact_path" in lens and not _safe_relative_path(lens.get("artifact_path")):
+            errors.append("lens_artifact.lens.artifact_path: must be a safe relative path")
+        if "sha256" in lens and not _valid_sha256(lens.get("sha256")):
+            errors.append("lens_artifact.lens.sha256: must be a SHA-256 hex digest")
+        if lens.get("identity_kind") == "artifact" and not _valid_sha256(lens.get("sha256")):
+            errors.append("lens_artifact.lens.sha256: artifact identities require SHA-256")
+        revision = lens.get("revision")
+        if isinstance(revision, str) and revision.strip().lower() in MUTABLE_REVISION_LABELS:
+            errors.append("lens_artifact.lens.revision: must be immutable, not a mutable label")
+
+    errors.extend(_validate_public_artifact_strings(artifact, "lens_artifact"))
+    return errors
+
+
 def ensure_valid(errors: list[str]) -> None:
     if errors:
         raise ValidationError("\n".join(errors))
@@ -628,6 +843,95 @@ def _validate_metric_results(
         else:
             metric_passes[str(metric_name)] = metric["passed"]
     return metric_passes
+
+
+def _validate_generated_utc(value: Any, where: str, errors: list[str]) -> None:
+    _validate_iso_datetime(value, where, "generated_utc", errors)
+
+
+def _validate_iso_datetime(value: Any, where: str, field: str, errors: list[str]) -> None:
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"{where}.{field}: must be a non-empty ISO-8601 datetime string")
+        return
+    try:
+        from datetime import datetime
+
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        errors.append(f"{where}.{field}: must be a non-empty ISO-8601 datetime string")
+
+
+def _validate_public_artifact_strings(value: Any, where: str) -> list[str]:
+    errors: list[str] = []
+
+    def walk(item: Any, path: str) -> None:
+        if isinstance(item, dict):
+            for key, child in item.items():
+                child_path = f"{path}.{key}" if path else str(key)
+                if isinstance(key, str) and _is_secret_key_name(key) and not _is_redacted(child):
+                    errors.append(f"{child_path}: contains unredacted secret-like field")
+                walk(child, child_path)
+            return
+        if isinstance(item, list):
+            for index, child in enumerate(item):
+                walk(child, f"{path}[{index}]")
+            return
+        if isinstance(item, str):
+            if _contains_secret_like_value(item):
+                errors.append(f"{path}: contains unredacted secret-like value")
+            if ABSOLUTE_LOCAL_PATH_PATTERN.search(item):
+                errors.append(f"{path}: contains an absolute local path")
+
+    walk(value, where)
+    return errors
+
+
+def _contains_secret_like_value(value: str) -> bool:
+    if _is_redacted(value):
+        return False
+    return any(pattern.search(value) for pattern in SECRET_VALUE_PATTERNS)
+
+
+def _is_redacted(value: Any) -> bool:
+    if value is None:
+        return True
+    if not isinstance(value, str):
+        return False
+    stripped = value.strip()
+    lowered = stripped.lower()
+    return (
+        lowered in REDACTED_VALUES
+        or lowered.startswith("<redacted:")
+        or (stripped.startswith("$") and len(stripped) > 1)
+        or (stripped.startswith("${") and stripped.endswith("}"))
+        or (lowered.startswith("<env:") and stripped.endswith(">"))
+    )
+
+
+def _is_secret_key_name(key: str) -> bool:
+    normalized = key.strip().lower().replace("-", "_")
+    compact = normalized.replace("_", "")
+    if "redact" in compact:
+        return False
+    return (
+        normalized in SECRET_KEY_NAMES
+        or normalized == "token"
+        or normalized.endswith("_token")
+        or normalized.endswith("_secret")
+        or ("secret" in compact)
+        or ("api" in compact and "key" in compact)
+        or ("auth" in compact and "token" in compact)
+        or ("private" in compact and "key" in compact)
+    )
+
+
+def _safe_relative_path(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    if "\\" in value or re.match(r"^[A-Za-z]:", value):
+        return False
+    pure = PurePosixPath(value)
+    return not pure.is_absolute() and ".." not in pure.parts
 
 
 def _validate_optional_string(

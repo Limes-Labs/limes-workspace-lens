@@ -112,12 +112,79 @@ python3 -m limes_workspace_lens compare-reports \
   --after "${TMP_DIR}/audit-card.json" \
   --out "${TMP_DIR}/comparison.md" \
   --json-out "${TMP_DIR}/comparison.json"
+python3 - "${TMP_DIR}" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+compatibility = json.loads((root / "behavior-eval.json").read_text(encoding="utf-8"))["compatibility"]
+command_log = {
+    "schema_version": "limes-workspace-lens/command-log.v0.1",
+    "generated_utc": "2026-07-07T00:00:00Z",
+    "compatibility": compatibility,
+    "redaction": {
+        "secrets_redacted": True,
+        "rules": ["No raw tokens, API keys, Authorization headers, or absolute local paths."],
+    },
+    "commands": [
+        {
+            "id": "smoke-run",
+            "purpose": "Exercise the dependency-free workspace-lens artifact pipeline.",
+            "command": "./scripts/run_smoke.sh",
+            "cwd": ".",
+            "exit_code": 0,
+            "started_utc": "2026-07-07T00:00:00Z",
+            "finished_utc": "2026-07-07T00:00:01Z",
+        }
+    ],
+}
+compute_manifest = {
+    "schema_version": "limes-workspace-lens/compute-manifest.v0.1",
+    "generated_utc": "2026-07-07T00:00:00Z",
+    "compatibility": compatibility,
+    "runtime": {
+        "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "platform": "smoke-fixture",
+    },
+    "hardware": {
+        "accelerator": "cpu",
+        "device_count": 0,
+    },
+    "dependencies": {
+        "limes-workspace-lens": "source-checkout",
+    },
+    "notes": ["Synthetic smoke fixture; not a real model run."],
+}
+lens_identity = {
+    "schema_version": "limes-workspace-lens/lens-artifact.v0.1",
+    "generated_utc": "2026-07-07T00:00:00Z",
+    "compatibility": compatibility,
+    "lens": {
+        "identity_kind": "revision",
+        "source": compatibility["lens_source"],
+        "revision": compatibility["lens_revision"],
+    },
+}
+for name, data in [
+    ("command-log.json", command_log),
+    ("compute-manifest.json", compute_manifest),
+    ("lens-identity.json", lens_identity),
+]:
+    (root / name).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
+python3 -m limes_workspace_lens validate-command-log "${TMP_DIR}/command-log.json"
+python3 -m limes_workspace_lens validate-compute-manifest "${TMP_DIR}/compute-manifest.json"
+python3 -m limes_workspace_lens validate-lens-artifact "${TMP_DIR}/lens-identity.json"
 python3 -m limes_workspace_lens build-manifest \
   "${TMP_DIR}/prompts.jsonl" \
   "${TMP_DIR}/audit-card.md" \
   "${TMP_DIR}/audit-card.json" \
   "${TMP_DIR}/behavior-eval.json" \
   "${TMP_DIR}/control-eval.json" \
+  "${TMP_DIR}/command-log.json" \
+  "${TMP_DIR}/compute-manifest.json" \
+  "${TMP_DIR}/lens-identity.json" \
   "${TMP_DIR}/reflection.jsonl" \
   "${TMP_DIR}/intervention-plan.json" \
   "${TMP_DIR}/comparison.md" \

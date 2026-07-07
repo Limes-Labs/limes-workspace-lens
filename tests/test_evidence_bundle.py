@@ -13,7 +13,13 @@ from typing import Any
 from limes_workspace_lens.analysis import score_readouts
 from limes_workspace_lens.evidence import EVIDENCE_BUNDLE_SCHEMA, validate_evidence_bundle
 from limes_workspace_lens.eval_artifacts import build_behavior_eval, build_control_eval
-from limes_workspace_lens.schema import AUDIT_SPEC_SCHEMA, READOUT_SCHEMA, REPORT_SCHEMA, load_json
+from limes_workspace_lens.schema import (
+    AUDIT_SPEC_SCHEMA,
+    READOUT_SCHEMA,
+    REPORT_SCHEMA,
+    load_json,
+    validate_command_log,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +63,27 @@ class EvidenceBundleTests(unittest.TestCase):
         self.assertEqual(0, result.returncode)
         self.assertIn("valid:", result.stdout)
 
+    def test_cli_validates_verified_support_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            build_bundle(tmp_path, status="verified", synthetic=False)
+            for command, path in [
+                ("validate-command-log", tmp_path / "command-log.json"),
+                ("validate-compute-manifest", tmp_path / "compute-manifest.json"),
+                ("validate-lens-artifact", tmp_path / "lens-identity.json"),
+            ]:
+                result = subprocess.run(
+                    [sys.executable, "-m", "limes_workspace_lens", command, str(path)],
+                    cwd=ROOT,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+                self.assertEqual("", result.stderr)
+                self.assertEqual(0, result.returncode)
+                self.assertIn("valid:", result.stdout)
+
     def test_verified_bundle_fails_when_behavior_artifact_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -74,6 +101,13 @@ class EvidenceBundleTests(unittest.TestCase):
             bundle = build_bundle(tmp_path, status="verified", synthetic=True)
             errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
         self.assertTrue(any("cannot use synthetic readouts" in error for error in errors))
+
+    def test_valid_verified_bundle_with_support_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertEqual([], errors)
 
     def test_mixed_bundle_requires_conflicting_findings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -177,6 +211,16 @@ class EvidenceBundleTests(unittest.TestCase):
             errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
         self.assertTrue(any("required_for_status=true" in error for error in errors))
 
+    def test_verified_support_artifact_rows_must_use_known_schemas(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            for artifact_row in bundle["artifacts"]:
+                if artifact_row["id"] == "command-log":
+                    artifact_row["schema_version"] = "wrong-schema"
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("must be 'limes-workspace-lens/command-log.v0.1'" in error for error in errors))
+
     def test_compatibility_mismatch_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -201,6 +245,100 @@ class EvidenceBundleTests(unittest.TestCase):
             errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
         self.assertTrue(any("has no row for prompt 'math-copy'" in error for error in errors))
         self.assertTrue(any("missing rows for prompt ids" in error for error in errors))
+
+    def test_verified_bundle_rejects_unredacted_command_log_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            command_log = load_json(tmp_path / "command-log.json")
+            command_log["commands"][0]["command"] = "python run.py --token hf_abcdefghijklmnop"
+            write_json(tmp_path / "command-log.json", command_log)
+            refresh_artifact_hash(bundle, "command-log", tmp_path / "command-log.json")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("artifact command-log" in error for error in errors))
+        self.assertTrue(any("unredacted secret-like value" in error for error in errors))
+
+    def test_verified_bundle_rejects_generic_token_environment_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            command_log = load_json(tmp_path / "command-log.json")
+            command_log["commands"][0]["environment"] = {"TOKEN": "supersecretvalue12345"}
+            write_json(tmp_path / "command-log.json", command_log)
+            refresh_artifact_hash(bundle, "command-log", tmp_path / "command-log.json")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("command_log.commands[0].environment.TOKEN" in error for error in errors))
+        self.assertTrue(any("unredacted secret-like field" in error for error in errors))
+
+    def test_verified_bundle_rejects_windows_style_escape_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            command_log = load_json(tmp_path / "command-log.json")
+            command_log["commands"][0]["cwd"] = "..\\secrets"
+            write_json(tmp_path / "command-log.json", command_log)
+            refresh_artifact_hash(bundle, "command-log", tmp_path / "command-log.json")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("command_log.commands[0].cwd" in error for error in errors))
+        self.assertTrue(any("safe relative path" in error for error in errors))
+
+    def test_command_log_schema_allows_signal_exit_code_before_promotion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            command_log = load_json(tmp_path / "command-log.json")
+            command_log["commands"][0]["exit_code"] = -9
+            self.assertEqual([], validate_command_log(command_log))
+            write_json(tmp_path / "command-log.json", command_log)
+            refresh_artifact_hash(bundle, "command-log", tmp_path / "command-log.json")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("successful command logs" in error for error in errors))
+
+    def test_verified_bundle_requires_successful_command_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            command_log = load_json(tmp_path / "command-log.json")
+            command_log["commands"][0]["exit_code"] = 1
+            write_json(tmp_path / "command-log.json", command_log)
+            refresh_artifact_hash(bundle, "command-log", tmp_path / "command-log.json")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("successful command logs" in error for error in errors))
+
+    def test_verified_bundle_validates_compute_manifest_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            compute_manifest = load_json(tmp_path / "compute-manifest.json")
+            compute_manifest["runtime"].pop("platform")
+            write_json(tmp_path / "compute-manifest.json", compute_manifest)
+            refresh_artifact_hash(bundle, "compute", tmp_path / "compute-manifest.json")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("artifact compute" in error for error in errors))
+        self.assertTrue(any("compute_manifest.runtime" in error for error in errors))
+
+    def test_verified_bundle_validates_lens_identity_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            lens_identity = load_json(tmp_path / "lens-identity.json")
+            lens_identity["lens"]["identity_kind"] = "artifact"
+            write_json(tmp_path / "lens-identity.json", lens_identity)
+            refresh_artifact_hash(bundle, "lens", tmp_path / "lens-identity.json")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("artifact lens" in error for error in errors))
+        self.assertTrue(any("artifact identities require SHA-256" in error for error in errors))
+
+    def test_verified_bundle_rejects_mutable_lens_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            lens_identity = load_json(tmp_path / "lens-identity.json")
+            lens_identity["lens"]["revision"] = "main"
+            write_json(tmp_path / "lens-identity.json", lens_identity)
+            refresh_artifact_hash(bundle, "lens", tmp_path / "lens-identity.json")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("mutable label" in error for error in errors))
 
 
 def build_bundle(
@@ -241,18 +379,50 @@ def build_bundle(
     )
     command_log = {
         "schema_version": "limes-workspace-lens/command-log.v0.1",
+        "generated_utc": "2026-07-07T00:00:00Z",
         "compatibility": compatibility,
-        "commands": ["python3 -m limes_workspace_lens summarize-readouts ..."],
+        "redaction": {
+            "secrets_redacted": True,
+            "rules": ["No raw tokens, API keys, Authorization headers, or absolute local paths."],
+        },
+        "commands": [
+            {
+                "id": "summarize-readouts",
+                "purpose": "Generate the machine-readable audit report from preserved readouts.",
+                "command": "python3 -m limes_workspace_lens summarize-readouts readouts.json --spec spec.json --json-out report.json --out report.md",
+                "cwd": ".",
+                "exit_code": 0,
+                "started_utc": "2026-07-07T00:00:00Z",
+                "finished_utc": "2026-07-07T00:00:01Z",
+            }
+        ],
     }
     compute_manifest = {
         "schema_version": "limes-workspace-lens/compute-manifest.v0.1",
+        "generated_utc": "2026-07-07T00:00:00Z",
         "compatibility": compatibility,
-        "runtime": "test-fixture",
+        "runtime": {
+            "python": f"{sys.version_info.major}.{sys.version_info.minor}",
+            "platform": "test-fixture",
+        },
+        "hardware": {
+            "accelerator": "cpu",
+            "device_count": 0,
+        },
+        "dependencies": {
+            "limes-workspace-lens": "test-suite",
+        },
+        "notes": ["Fixture compute manifest for schema validation."],
     }
     lens_identity = {
         "schema_version": "limes-workspace-lens/lens-artifact.v0.1",
+        "generated_utc": "2026-07-07T00:00:00Z",
         "compatibility": compatibility,
-        "revision": "fixture-lens-revision",
+        "lens": {
+            "identity_kind": "revision",
+            "source": spec["lens"]["source"],
+            "revision": "fixture-lens-revision",
+        },
     }
 
     write_json(root / "spec.json", spec)
@@ -446,6 +616,14 @@ def artifact(
         "required_for_status": status in {"mixed", "negative", "verified"}
         or kind in {"audit_spec", "readouts", "audit_report_json"},
     }
+
+
+def refresh_artifact_hash(bundle: dict[str, Any], artifact_id: str, path: Path) -> None:
+    for row in bundle["artifacts"]:
+        if row["id"] == artifact_id:
+            row["sha256"] = sha256(path)
+            return
+    raise AssertionError(f"missing artifact {artifact_id!r}")
 
 
 def gates_for_status(status: str) -> list[dict[str, Any]]:
