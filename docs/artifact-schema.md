@@ -288,6 +288,69 @@ Recommended artifact `kind` values:
 - `compute_manifest`
 - `lens_artifact_or_revision`
 
+## Command Log
+
+Schema: `limes-workspace-lens/command-log.v0.1`
+
+Validate with:
+
+```bash
+python3 -m limes_workspace_lens validate-command-log results/run/command-log.json
+```
+
+Required top-level keys:
+
+- `schema_version`
+- `generated_utc`
+- `compatibility`
+- `redaction`
+- `commands`
+
+`redaction.secrets_redacted` must be `true`, and `redaction.rules` must describe the redaction policy. `commands` is a non-empty list of structured command records with stable `id`, `purpose`, shell `command`, safe relative `cwd`, and integer `exit_code`. For `verified` evidence bundles, every command in the command log must have `exit_code: 0`.
+
+Command logs reject unredacted secret-like values and absolute local paths. Preserve environment variable names such as `$HF_TOKEN` or `<env:HF_TOKEN>` instead of raw values.
+
+## Compute Manifest
+
+Schema: `limes-workspace-lens/compute-manifest.v0.1`
+
+Validate with:
+
+```bash
+python3 -m limes_workspace_lens validate-compute-manifest results/run/compute-manifest.json
+```
+
+Required top-level keys:
+
+- `schema_version`
+- `generated_utc`
+- `runtime`
+- `hardware`
+- `dependencies`
+
+`runtime` records at least `python` and `platform`. `hardware` records at least `accelerator` and non-negative `device_count`. `dependencies` is a non-empty object mapping dependency names to pinned versions or provenance labels. Optional `compatibility`, `resource_limits`, and `notes` fields may add replay context.
+
+The compute manifest is runtime provenance. It is separate from the artifact manifest, which preserves file paths, sizes, and SHA256 hashes.
+
+## Lens Artifact Identity
+
+Schema: `limes-workspace-lens/lens-artifact.v0.1`
+
+Validate with:
+
+```bash
+python3 -m limes_workspace_lens validate-lens-artifact results/run/lens-identity.json
+```
+
+Required top-level keys:
+
+- `schema_version`
+- `generated_utc`
+- `compatibility`
+- `lens`
+
+`lens` records `identity_kind`, `source`, and immutable `revision`. Allowed identity kinds are `revision`, `artifact`, and `adapter`. `artifact` identities require a SHA256 digest. Mutable labels such as `main`, `master`, `HEAD`, and `latest` are rejected for verified evidence.
+
 Status-specific rules:
 
 - `diagnostic`: requires audit spec, readouts, and audit report; claim scope must be `hypothesis_generation`; missing evidence must be listed; promotion is disallowed.

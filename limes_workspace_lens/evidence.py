@@ -10,13 +10,19 @@ from .comparison import COMPARISON_SCHEMA
 from .schema import (
     AUDIT_SPEC_SCHEMA,
     BEHAVIOR_EVAL_SCHEMA,
+    COMMAND_LOG_SCHEMA,
+    COMPUTE_MANIFEST_SCHEMA,
     CONTROL_EVAL_SCHEMA,
     INTERVENTION_SCHEMA,
+    LENS_ARTIFACT_SCHEMA,
     READOUT_SCHEMA,
     REPORT_SCHEMA,
     require_keys,
     validate_behavior_eval,
+    validate_command_log,
+    validate_compute_manifest,
     validate_control_eval,
+    validate_lens_artifact,
 )
 
 
@@ -45,6 +51,9 @@ KNOWN_ARTIFACT_SCHEMAS = {
     "intervention_plan": INTERVENTION_SCHEMA,
     "behavior_eval": BEHAVIOR_EVAL_SCHEMA,
     "control_eval": CONTROL_EVAL_SCHEMA,
+    "command_log": COMMAND_LOG_SCHEMA,
+    "compute_manifest": COMPUTE_MANIFEST_SCHEMA,
+    "lens_artifact_or_revision": LENS_ARTIFACT_SCHEMA,
 }
 
 BASE_REQUIRED_KINDS = {"audit_spec", "readouts", "audit_report_json"}
@@ -506,6 +515,7 @@ def _validate_status_rules(
         errors.extend(_require_behavior_and_controls(pairings, status))
         errors.extend(_require_pairing_prompt_coverage(prompt_ids, pairing_prompt_ids, status))
         errors.extend(_require_eval_rows_passed(loaded_artifacts, status))
+        errors.extend(_require_command_logs_succeeded(loaded_artifacts, status))
         errors.extend(_require_preserved_artifact_hashes(artifacts))
         errors.extend(_reject_synthetic_verified_readouts(loaded_artifacts))
         return errors
@@ -593,6 +603,14 @@ def _validate_loaded_eval_artifacts(loaded_artifacts: dict[str, dict[str, Any]])
             errors.extend(
                 f"artifact {artifact_id}: {error}" for error in validate_control_eval(artifact, spec)
             )
+        if schema_version == COMMAND_LOG_SCHEMA:
+            errors.extend(f"artifact {artifact_id}: {error}" for error in validate_command_log(artifact))
+        if schema_version == COMPUTE_MANIFEST_SCHEMA:
+            errors.extend(
+                f"artifact {artifact_id}: {error}" for error in validate_compute_manifest(artifact)
+            )
+        if schema_version == LENS_ARTIFACT_SCHEMA:
+            errors.extend(f"artifact {artifact_id}: {error}" for error in validate_lens_artifact(artifact))
     return errors
 
 
@@ -616,6 +634,30 @@ def _require_eval_rows_passed(
             errors.append(
                 f"bundle.artifacts[{artifact_id}]: {status} bundles require passing "
                 f"behavior/control rows, failed prompts {failed_prompts}"
+            )
+    return errors
+
+
+def _require_command_logs_succeeded(
+    loaded_artifacts: dict[str, dict[str, Any]],
+    status: str,
+) -> list[str]:
+    errors: list[str] = []
+    for artifact_id, artifact in loaded_artifacts.items():
+        if artifact.get("schema_version") != COMMAND_LOG_SCHEMA:
+            continue
+        commands = artifact.get("commands")
+        if not isinstance(commands, list):
+            continue
+        failed_command_ids = sorted(
+            str(command.get("id", index))
+            for index, command in enumerate(commands)
+            if isinstance(command, dict) and command.get("exit_code") != 0
+        )
+        if failed_command_ids:
+            errors.append(
+                f"bundle.artifacts[{artifact_id}]: {status} bundles require successful "
+                f"command logs, failed commands {failed_command_ids}"
             )
     return errors
 

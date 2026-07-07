@@ -23,7 +23,10 @@ from .schema import (
     ensure_valid,
     load_json,
     validate_behavior_eval,
+    validate_command_log,
+    validate_compute_manifest,
     validate_control_eval,
+    validate_lens_artifact,
     validate_audit_spec,
     validate_readouts,
     validate_report,
@@ -58,6 +61,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     validate_control.add_argument("control_eval")
     validate_control.add_argument("--spec")
+
+    validate_command_log_parser = subparsers.add_parser(
+        "validate-command-log", help="Validate a command-log artifact."
+    )
+    validate_command_log_parser.add_argument("command_log")
+
+    validate_compute_manifest_parser = subparsers.add_parser(
+        "validate-compute-manifest", help="Validate a compute-manifest artifact."
+    )
+    validate_compute_manifest_parser.add_argument("compute_manifest")
+
+    validate_lens_artifact_parser = subparsers.add_parser(
+        "validate-lens-artifact", help="Validate a lens-artifact identity artifact."
+    )
+    validate_lens_artifact_parser.add_argument("lens_artifact")
 
     validate_bundle = subparsers.add_parser(
         "validate-bundle", help="Validate an evidence-bundle artifact."
@@ -186,6 +204,21 @@ def main(argv: list[str] | None = None) -> int:
             artifact = load_json(args.control_eval)
             ensure_valid(validate_control_eval(artifact, spec))
             print(f"valid: {args.control_eval}")
+            return 0
+        if args.command == "validate-command-log":
+            artifact = load_json(args.command_log)
+            ensure_valid(validate_command_log(artifact))
+            print(f"valid: {args.command_log}")
+            return 0
+        if args.command == "validate-compute-manifest":
+            artifact = load_json(args.compute_manifest)
+            ensure_valid(validate_compute_manifest(artifact))
+            print(f"valid: {args.compute_manifest}")
+            return 0
+        if args.command == "validate-lens-artifact":
+            artifact = load_json(args.lens_artifact)
+            ensure_valid(validate_lens_artifact(artifact))
+            print(f"valid: {args.lens_artifact}")
             return 0
         if args.command == "validate-bundle":
             bundle = load_json(args.bundle)
