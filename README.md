@@ -55,6 +55,18 @@ python3 -m limes_workspace_lens summarize-readouts examples/synthetic_readouts.j
   --json-out runs/workspace-audit-card.json
 ```
 
+Build and validate an artifact manifest:
+
+```bash
+python3 -m limes_workspace_lens build-manifest \
+  runs/workspace-audit-card.md \
+  runs/workspace-audit-card.json \
+  --root . \
+  --out runs/artifact-manifest.json \
+  --command "python3 -m limes_workspace_lens summarize-readouts ..."
+python3 -m limes_workspace_lens validate-manifest runs/artifact-manifest.json --root .
+```
+
 Compare two checkpoint reports:
 
 ```bash
