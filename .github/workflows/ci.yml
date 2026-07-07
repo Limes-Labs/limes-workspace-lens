@@ -7,10 +7,17 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
+      - run: python3 -m pip install --upgrade pip
       - run: python3 -m unittest discover -s tests
+      - run: python3 -m py_compile limes_workspace_lens/*.py scripts/*.py
       - run: ./scripts/run_smoke.sh
+      - run: ./scripts/check_install.sh
