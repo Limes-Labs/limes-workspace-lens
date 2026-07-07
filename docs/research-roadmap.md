@@ -2,6 +2,8 @@
 
 The goal is to make workspace-lens audits useful to model developers before attempting training-time optimization.
 
+For the engineering completion plan, see `docs/system-completion-plan.md`. That document is the source of truth for missing production components, focused PR order, and acceptance gates.
+
 ## v0.1 - Audit Cards
 
 Status: initial implementation.
