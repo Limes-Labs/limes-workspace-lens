@@ -29,6 +29,7 @@ For each checkpoint, preserve:
 - command log;
 - hardware and runtime note;
 - behavior-eval outputs for the same prompts when applicable.
+- evidence bundle tying readouts, behavior, controls, command logs, and status gates together.
 
 For before/after comparisons, preserve:
 
@@ -73,6 +74,7 @@ For Limes AutoResearch tasks:
 2. Run the model eval and workspace-lens audit under the same checkpoint ID.
 3. Record the audit-card paths in the experiment ledger.
 4. Promote only if behavior metrics, internal readouts, and controls point in a coherent direction.
+5. Validate the evidence bundle with `--strict` before treating a status as reviewed.
 
 Suggested result status labels:
 
@@ -80,6 +82,8 @@ Suggested result status labels:
 - `mixed`: behavior improves but readouts expose possible regressions, or the reverse.
 - `negative`: no useful signal after controls.
 - `verified`: replayed run with preserved artifacts and compatible controls.
+
+These labels should come from `validate-bundle`, especially for `verified` results. A report card by itself is diagnostic evidence, not a promotion gate.
 
 ## Training-Time Use
 

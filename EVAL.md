@@ -17,6 +17,14 @@ Workspace-lens evaluation must pair internal readouts with external behavior.
 - `negative`: tested signal did not survive controls.
 - `verified`: replayed, preserved, behavior-linked, and control-backed.
 
+Status labels should be backed by an evidence bundle, not assigned by prose alone:
+
+```bash
+python3 -m limes_workspace_lens validate-bundle results/run/evidence-bundle.json --root results/run --strict
+```
+
+Use `--expected-status verified` before promoting a result as verified. Verified bundles must include behavior and control artifacts, command logs, compute manifests, preserved hashes, compatible settings, and non-synthetic readouts.
+
 ## Minimum Real Claim
 
 A minimum credible claim looks like:

@@ -7,6 +7,7 @@ The goal is to make workspace-lens audits useful to model developers before atte
 Status: initial implementation.
 
 - Dependency-free spec, readout, report, comparison, reflection-data, and intervention-plan schemas.
+- Evidence-bundle validation for diagnostic, mixed, negative, and verified result statuses.
 - CPU smoke path on synthetic fixtures.
 - Optional `jlens` wrappers for real Hugging Face model environments.
 - Documentation for non-claims and trainer workflow.
@@ -16,6 +17,7 @@ Acceptance gate:
 - tests pass;
 - smoke command runs from a fresh clone;
 - README explains real-model path and evidence boundaries.
+- status promotion requires a validated evidence bundle.
 
 ## v0.2 - Open-Weight Replication Pack
 

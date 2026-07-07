@@ -11,6 +11,7 @@ The v0.1 slice is an audit-card and workflow layer. It can already:
 - validate public audit specs and readout artifacts;
 - summarize top-k Jacobian-lens readouts into JSON and Markdown audit cards;
 - compare two checkpoint reports with compatible lens settings;
+- validate evidence bundles that bind readouts to behavior artifacts, controls, command logs, compute manifests, and status gates;
 - export prompt suites for real lens fitting and application;
 - generate counterfactual-reflection JSONL candidates from a locked spec;
 - generate intervention plans for coordinate swaps or ablations;
@@ -63,6 +64,16 @@ python3 -m limes_workspace_lens compare-reports \
   --after runs/posttrained-report.json \
   --out runs/checkpoint-comparison.md \
   --json-out runs/checkpoint-comparison.json
+```
+
+Validate an evidence bundle before treating a result status as meaningful:
+
+```bash
+python3 -m limes_workspace_lens validate-bundle runs/evidence-bundle.json --root runs --strict
+python3 -m limes_workspace_lens validate-bundle runs/evidence-bundle.json \
+  --root runs \
+  --strict \
+  --expected-status verified
 ```
 
 ## Real Model Path
@@ -124,7 +135,7 @@ python3 -m py_compile limes_workspace_lens/*.py scripts/*.py
 git diff --check
 ```
 
-For real model runs, also preserve the fitted lens artifact, readout JSON, audit card, exact command log, model revision, lens revision, and compute manifest.
+For real model runs, also preserve the fitted lens artifact, readout JSON, audit card, exact command log, model revision, lens revision, compute manifest, behavior/control artifacts, and a validated evidence bundle.
 
 ## Sources
 

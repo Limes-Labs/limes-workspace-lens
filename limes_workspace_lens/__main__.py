@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .analysis import render_markdown_report, score_readouts
 from .comparison import compare_reports, render_markdown_comparison
+from .evidence import VALID_BUNDLE_STATUSES, validate_evidence_bundle
 from .examples import example_spec
 from .intervention import build_intervention_plan
 from .reflection import build_reflection_rows
@@ -33,6 +34,22 @@ def main(argv: list[str] | None = None) -> int:
         "validate-readouts", help="Validate a workspace readout artifact."
     )
     validate_readouts_parser.add_argument("readouts")
+
+    validate_bundle = subparsers.add_parser(
+        "validate-bundle", help="Validate an evidence-bundle artifact."
+    )
+    validate_bundle.add_argument("bundle")
+    validate_bundle.add_argument("--root", default=".", help="Root for referenced artifact paths.")
+    validate_bundle.add_argument(
+        "--strict",
+        action="store_true",
+        help="Require referenced paths and SHA-256 digests to resolve under --root.",
+    )
+    validate_bundle.add_argument(
+        "--expected-status",
+        choices=sorted(VALID_BUNDLE_STATUSES),
+        help="Fail unless the bundle has this status.",
+    )
 
     export_prompts = subparsers.add_parser(
         "export-prompts", help="Export prompt text from an audit spec as JSONL."
@@ -85,6 +102,18 @@ def main(argv: list[str] | None = None) -> int:
             readouts = load_json(args.readouts)
             ensure_valid(validate_readouts(readouts))
             print(f"valid: {args.readouts}")
+            return 0
+        if args.command == "validate-bundle":
+            bundle = load_json(args.bundle)
+            ensure_valid(
+                validate_evidence_bundle(
+                    bundle,
+                    root=args.root,
+                    strict=args.strict,
+                    expected_status=args.expected_status,
+                )
+            )
+            print(f"valid: {args.bundle}")
             return 0
         if args.command == "export-prompts":
             spec = load_json(args.spec)
