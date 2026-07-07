@@ -52,7 +52,17 @@ class ManifestTests(unittest.TestCase):
             (root / "a.txt").write_text("x", encoding="utf-8")
             errors = validate_manifest(manifest, root=root)
             self.assertTrue(any("duplicates" in error for error in errors))
-            self.assertTrue(any("escapes manifest root" in error for error in errors))
+            self.assertTrue(any("safe relative path" in error for error in errors))
+
+    def test_validate_manifest_rejects_absolute_file_path_even_under_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.json"
+            artifact.write_text("{}", encoding="utf-8")
+            manifest = build_manifest([artifact], root=root)
+            manifest["files"][0]["path"] = str(artifact)
+            errors = validate_manifest(manifest, root=root)
+            self.assertTrue(any("safe relative path" in error for error in errors))
 
     def test_build_manifest_rejects_inputs_outside_root(self) -> None:
         with tempfile.TemporaryDirectory() as root_tmp, tempfile.TemporaryDirectory() as other_tmp:
@@ -60,6 +70,27 @@ class ManifestTests(unittest.TestCase):
             outside.write_text("{}", encoding="utf-8")
             with self.assertRaises(ValueError):
                 build_manifest([outside], root=root_tmp)
+
+    def test_manifest_rejects_public_command_and_metadata_leaks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "artifact.json"
+            artifact.write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "unredacted secret-like value"):
+                build_manifest(
+                    [artifact],
+                    root=root,
+                    commands=["python run.py --token hf_abcdefghijklmnop"],
+                )
+
+            manifest = build_manifest([artifact], root=root, commands=["python run.py"])
+            manifest["commands"] = ["python /tmp/private/run.py"]
+            manifest["metadata"] = {"HF_TOKEN": "raw-token-value"}
+            errors = validate_manifest(manifest, root=root)
+            self.assertTrue(any("manifest.commands[0]" in error for error in errors))
+            self.assertTrue(any("absolute local path" in error for error in errors))
+            self.assertTrue(any("manifest.metadata.HF_TOKEN" in error for error in errors))
+            self.assertTrue(any("secret-like field" in error for error in errors))
 
     def test_parse_metadata_requires_key_value_pairs(self) -> None:
         self.assertEqual({"a": "b"}, parse_metadata(["a=b"]))
@@ -101,6 +132,27 @@ class ManifestCliTests(unittest.TestCase):
             failed = self.run_cli("validate-manifest", str(manifest), "--root", str(root), check=False)
             self.assertNotEqual(0, failed.returncode)
             self.assertIn("sha256 mismatch", failed.stderr)
+
+    def test_cli_build_manifest_rejects_unredacted_command_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "report.json"
+            manifest = root / "manifest.json"
+            artifact.write_text(json.dumps({"ok": True}) + "\n", encoding="utf-8")
+            failed = self.run_cli(
+                "build-manifest",
+                str(artifact),
+                "--root",
+                str(root),
+                "--out",
+                str(manifest),
+                "--command",
+                "python run.py --token hf_abcdefghijklmnop",
+                check=False,
+            )
+            self.assertNotEqual(0, failed.returncode)
+            self.assertIn("unredacted secret-like value", failed.stderr)
+            self.assertFalse(manifest.exists())
 
     def test_cli_manifest_validates_after_bundle_move(self) -> None:
         with tempfile.TemporaryDirectory() as source_tmp, tempfile.TemporaryDirectory() as target_tmp:

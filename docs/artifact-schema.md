@@ -61,6 +61,8 @@ Optional top-level fields:
 
 The schema intentionally does not require a particular lens implementation. A readout can come from Anthropic's `jlens`, a fork, or another compatible Jacobian-lens implementation.
 
+Public metadata fields such as `source`, `model`, `lens_repo`, `lens_file`, and `provenance` are linted for common secret-like values and local path leaks. Token rows are not linted this way because terms such as `secret`, `fake`, or `token` may be legitimate readout content. `lens_file` must be a safe relative path inside the lens repository.
+
 ## Audit Report
 
 Schema: `limes-workspace-lens/report.v0.1`
@@ -83,6 +85,8 @@ The report contains:
 - interpretation notes.
 
 The JSON report is the canonical machine-readable artifact. The Markdown report is for review.
+
+Report identity metadata copied from the spec and readout artifact is linted for common secret-like values and local path leaks. Token-derived hits are not linted, so a hit term like `secret` can still appear as an audit result.
 
 ## Comparison Report
 
@@ -141,7 +145,7 @@ Optional input fields:
 - `response_id`
 - `finish_reason`
 
-The generator is dependency-free and does not execute a model. It evaluates preserved outputs, records the input file hash, and fails if any spec prompt is missing, duplicated, or unknown.
+The generator is dependency-free and does not execute a model. It evaluates preserved outputs, records the input file hash, and fails if any spec prompt is missing, duplicated, or unknown. If `--responses` is an absolute local path, the artifact stores a public label such as `<local:observed-outputs.jsonl>` while preserving `responses_sha256` for replay evidence.
 
 Top-level fields include:
 
@@ -159,7 +163,7 @@ The default behavior metrics are:
 - `nonempty_output`
 - `forbidden_surface_terms_absent`, using prompt-level `surface_output_should_not_contain` terms when present.
 
-Rows store output hashes by default. Use `--include-output-text` only when preserving raw outputs is acceptable for the run.
+Rows store output hashes by default. Use `--include-output-text` only when preserving raw outputs is acceptable for the run. When raw output text is included, validators lint it for common secret-like values and local path leaks.
 
 ## Control Eval
 
@@ -205,6 +209,8 @@ Allowed control kinds:
 
 The current generator records and validates saved controls; it does not claim that random-direction or intervention controls were executed unless those outputs came from an external runner that actually performed them. For lexical or prompt-variant smoke tests, use `prompt_variant`. Row-level `control_kind` values must match the artifact-level `control.kind`.
 
+As with behavior evals, absolute input response paths are stored as public `<local:...>` labels while the input file hash is preserved. Included `control_text` and `output_text` fields are linted when present.
+
 ## Artifact Manifest
 
 Schema: `limes-workspace-lens/artifact-manifest.v0.1`
@@ -235,6 +241,8 @@ The manifest records:
 - commands and user-supplied metadata.
 
 Validation fails when a file is missing, has changed size, has changed SHA256, duplicates a manifest path, or escapes the declared manifest root. Manifests store `root` as `.` for portability; `validate-manifest` uses the manifest file's directory by default, or an explicit `--root` when provided.
+
+Manifest file records must use safe relative paths. Commands and user metadata are linted for common secret-like values and local path leaks, so public manifests should store environment references such as `<env:HF_TOKEN>` rather than raw values.
 
 ## Evidence Bundle
 
@@ -271,7 +279,7 @@ Artifact records require:
 - `schema_version`
 - `required_for_status`
 
-For `mixed`, `negative`, and `verified` bundles, `--strict` must be used so the validator can load referenced files and check behavior/control coverage. Strict validation resolves artifact paths under `--root` and rejects symlinks or relative paths that escape that root. For `verified` bundles, every artifact required for the status must include `sha256`; behavior/control rows must pass; and validation checks paths, hashes, non-synthetic readouts, prompt coverage, and compatibility objects.
+For `mixed`, `negative`, and `verified` bundles, `--strict` must be used so the validator can load referenced files and check behavior/control coverage. Strict validation resolves artifact paths under `--root`, rejects symlinks or relative paths that escape that root, and revalidates loaded specs, readouts, reports, behavior/control artifacts, command logs, compute manifests, and lens identities. For `verified` bundles, every artifact required for the status must include `sha256`; behavior/control rows must pass; and validation checks paths, hashes, non-synthetic readouts, prompt coverage, compatibility objects, and public-artifact hygiene.
 
 Recommended artifact `kind` values:
 

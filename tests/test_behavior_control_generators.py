@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from limes_workspace_lens.analysis import score_readouts
+from limes_workspace_lens.eval_artifacts import (
+    build_behavior_eval,
+    build_compatibility,
+    build_control_eval,
+    load_jsonl,
+)
 from limes_workspace_lens.evidence import EVIDENCE_BUNDLE_SCHEMA, validate_evidence_bundle
 from limes_workspace_lens.schema import (
     AUDIT_SPEC_SCHEMA,
@@ -102,6 +108,8 @@ class BehaviorControlGeneratorTests(unittest.TestCase):
         self.assertEqual(3, len(control["rows"]))
         self.assertNotIn("output_text", behavior["rows"][0])
         self.assertEqual("stdlib-only-no-model-execution", behavior["generation"]["dependency_profile"])
+        self.assertEqual("<local:behavior-responses.jsonl>", behavior["generation"]["responses_path"])
+        self.assertEqual("<local:control-responses.jsonl>", control["generation"]["responses_path"])
         self.assertEqual({"temperature": 0, "max_new_tokens": 32}, behavior["generation"]["config"])
         math_row = next(row for row in behavior["rows"] if row["prompt_id"] == "math-copy")
         self.assertTrue(math_row["metrics"]["forbidden_surface_terms_absent"]["passed"])
@@ -174,6 +182,98 @@ class BehaviorControlGeneratorTests(unittest.TestCase):
             any("must match control_eval.control.kind" in error for error in validate_control_eval(mismatched_control_kind, spec))
         )
 
+    def test_eval_validators_reject_public_generation_metadata_leaks(self) -> None:
+        spec = load_json(ROOT / "examples" / "workspace_audit_spec.json")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            behavior, _control = build_eval_artifacts(tmp_path)
+
+        leaked_path = copy.deepcopy(behavior)
+        leaked_path["generation"]["responses_path"] = "/tmp/private/behavior-responses.jsonl"
+        path_errors = validate_behavior_eval(leaked_path, spec)
+        self.assertTrue(any("responses_path" in error for error in path_errors))
+        self.assertTrue(any("absolute local path" in error for error in path_errors))
+
+        leaked_secret = copy.deepcopy(behavior)
+        leaked_secret["generation"]["config"] = {"api_key": "sk-abcdefghijklmnop"}
+        secret_errors = validate_behavior_eval(leaked_secret, spec)
+        self.assertTrue(any("generation.config.api_key" in error for error in secret_errors))
+        self.assertTrue(any("secret-like field" in error for error in secret_errors))
+
+    def test_eval_validators_reject_model_and_compatibility_public_leaks(self) -> None:
+        spec = load_json(ROOT / "examples" / "workspace_audit_spec.json")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            behavior, control = build_eval_artifacts(tmp_path)
+
+        behavior["model"]["id"] = "/tmp/private/model"
+        behavior["compatibility"]["lens_source"] = "hf_abcdefghijklmnop"
+        behavior_errors = validate_behavior_eval(behavior, spec)
+        self.assertTrue(any("behavior_eval.model.id" in error for error in behavior_errors))
+        self.assertTrue(any("absolute local path" in error for error in behavior_errors))
+        self.assertTrue(
+            any("behavior_eval.compatibility.lens_source" in error for error in behavior_errors)
+        )
+        self.assertTrue(any("unredacted secret-like value" in error for error in behavior_errors))
+
+        control["model"]["checkpoint"] = "/tmp/private/checkpoint"
+        control["compatibility"]["model_checkpoint"] = "/tmp/private/checkpoint"
+        control_errors = validate_control_eval(control, spec)
+        self.assertTrue(any("control_eval.model.checkpoint" in error for error in control_errors))
+        self.assertTrue(
+            any("control_eval.compatibility.model_checkpoint" in error for error in control_errors)
+        )
+
+    def test_include_output_text_rejects_public_text_leaks(self) -> None:
+        spec = load_json(ROOT / "examples" / "workspace_audit_spec.json")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            behavior_rows = tmp_path / "behavior-responses.jsonl"
+            control_rows = tmp_path / "control-responses.jsonl"
+            write_jsonl(
+                behavior_rows,
+                [
+                    {
+                        **row,
+                        "output": "Authorization: Bearer abcdefghijklmno",
+                    }
+                    if row["prompt_id"] == "math-copy"
+                    else row
+                    for row in example_behavior_rows()
+                ],
+            )
+            write_jsonl(
+                control_rows,
+                [
+                    {
+                        **row,
+                        "control_text": "Use /tmp/private/control.txt as the control prompt.",
+                    }
+                    if row["prompt_id"] == "math-copy"
+                    else row
+                    for row in example_control_rows()
+                ],
+            )
+            compatibility = default_compatibility()
+            behavior = build_behavior_eval_for_test(
+                spec,
+                behavior_rows,
+                compatibility=compatibility,
+                include_output_text=True,
+            )
+            control = build_control_eval_for_test(
+                spec,
+                control_rows,
+                compatibility=compatibility,
+                include_output_text=True,
+            )
+        behavior_errors = validate_behavior_eval(behavior, spec)
+        control_errors = validate_control_eval(control, spec)
+        self.assertTrue(any("output_text" in error for error in behavior_errors))
+        self.assertTrue(any("unredacted secret-like value" in error for error in behavior_errors))
+        self.assertTrue(any("control_text" in error for error in control_errors))
+        self.assertTrue(any("absolute local path" in error for error in control_errors))
+
     def test_control_generator_rejects_row_kind_that_disagrees_with_cli_kind(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -242,6 +342,56 @@ def build_eval_artifacts(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         str(control_out),
     )
     return load_json(behavior_out), load_json(control_out)
+
+
+def default_compatibility() -> dict[str, Any]:
+    spec = load_json(ROOT / "examples" / "workspace_audit_spec.json")
+    return build_compatibility(
+        spec,
+        tokenizer_revision="fixture-tokenizer-revision",
+        lens_revision="fixture-lens-revision",
+        fit_procedure="fixture-fit-procedure",
+        position_policy="positions=-1",
+    )
+
+
+def build_behavior_eval_for_test(
+    spec: dict[str, Any],
+    responses_path: Path,
+    *,
+    compatibility: dict[str, Any],
+    include_output_text: bool,
+) -> dict[str, Any]:
+    return build_behavior_eval(
+        spec,
+        load_jsonl(responses_path),
+        compatibility=compatibility,
+        responses_path=str(responses_path),
+        model_id=spec["model"]["name"],
+        seed=7,
+        generation_config={},
+        include_output_text=include_output_text,
+    )
+
+
+def build_control_eval_for_test(
+    spec: dict[str, Any],
+    responses_path: Path,
+    *,
+    compatibility: dict[str, Any],
+    include_output_text: bool,
+) -> dict[str, Any]:
+    return build_control_eval(
+        spec,
+        load_jsonl(responses_path),
+        compatibility=compatibility,
+        responses_path=str(responses_path),
+        model_id=spec["model"]["name"],
+        control_kind="prompt_variant",
+        seed=7,
+        generation_config={},
+        include_output_text=include_output_text,
+    )
 
 
 def build_negative_bundle(root: Path) -> dict[str, Any]:

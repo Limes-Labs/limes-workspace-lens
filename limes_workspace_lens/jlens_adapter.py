@@ -4,9 +4,11 @@ import hashlib
 import importlib
 import json
 import platform
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from pathlib import PurePosixPath
 from types import ModuleType
 from typing import Any
 
@@ -178,7 +180,8 @@ def build_provenance(
     seed: int | None,
     deps: OptionalDeps,
 ) -> dict[str, Any]:
-    lens_path = _lens_path(lens_repo, lens_file)
+    safe_file = safe_lens_file(lens_file)
+    lens_path = _lens_path(lens_repo, safe_file)
     return {
         "schema_version": "limes-workspace-lens/jlens-adapter-provenance.v0.1",
         "adapter_version": __version__,
@@ -192,7 +195,7 @@ def build_provenance(
         },
         "lens": {
             "repo": public_identifier(lens_repo) if lens_repo else None,
-            "file": lens_file,
+            "file": safe_file,
             "revision": lens_revision,
             "sha256": sha256_file(lens_path) if lens_path and lens_path.exists() else None,
         },
@@ -223,6 +226,26 @@ def public_identifier(value: str | None) -> str | None:
     return value
 
 
+def safe_lens_file(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise AdapterError("--lens-file must be a safe relative path")
+    stripped = value.strip()
+    if (
+        "\\" in stripped
+        or ":" in stripped
+        or stripped.startswith("~")
+        or "://" in stripped
+        or re.match(r"^[A-Za-z]:", stripped)
+    ):
+        raise AdapterError("--lens-file must be a safe relative path")
+    path = PurePosixPath(stripped)
+    if path.is_absolute() or ".." in path.parts or not path.name:
+        raise AdapterError("--lens-file must be a safe relative path")
+    return path.as_posix()
+
+
 def sha256_file(path: Path | None) -> str | None:
     if path is None or not path.exists() or not path.is_file():
         return None
@@ -241,7 +264,7 @@ def write_json(path: Path, value: dict[str, Any]) -> None:
 def _lens_path(lens_repo: str | None, lens_file: str | None) -> Path | None:
     if not lens_repo or not lens_file:
         return None
-    return Path(lens_repo) / lens_file
+    return Path(lens_repo) / safe_lens_file(lens_file)
 
 
 def _cuda_available(torch_module: Any) -> bool:

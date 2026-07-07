@@ -282,6 +282,32 @@ class EvidenceBundleTests(unittest.TestCase):
         self.assertTrue(any("command_log.commands[0].cwd" in error for error in errors))
         self.assertTrue(any("safe relative path" in error for error in errors))
 
+    def test_strict_bundle_validates_loaded_readout_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            readouts = load_json(tmp_path / "readouts.json")
+            readouts["provenance"] = {"command": "python /tmp/private/export.py"}
+            write_json(tmp_path / "readouts.json", readouts)
+            refresh_artifact_hash(bundle, "readouts", tmp_path / "readouts.json")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("artifact readouts" in error for error in errors))
+        self.assertTrue(any("readouts.provenance.command" in error for error in errors))
+        self.assertTrue(any("absolute local path" in error for error in errors))
+
+    def test_strict_bundle_validates_loaded_report_public_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            report = load_json(tmp_path / "report.json")
+            report["input_readouts"]["source"] = "/tmp/private/readouts.json"
+            write_json(tmp_path / "report.json", report)
+            refresh_artifact_hash(bundle, "report", tmp_path / "report.json")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("artifact report" in error for error in errors))
+        self.assertTrue(any("report.metadata.input_readouts.source" in error for error in errors))
+        self.assertTrue(any("absolute local path" in error for error in errors))
+
     def test_command_log_schema_allows_signal_exit_code_before_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

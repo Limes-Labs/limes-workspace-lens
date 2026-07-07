@@ -53,6 +53,7 @@ This is now a useful artifact-contract and audit-card workbench, but it is not y
 - [x] Evidence-bundle strict mode rejects artifact symlink escapes outside the declared root.
 - [x] Verified-bundle support schemas for command logs, compute manifests, and lens artifact identity, with direct CLI validators.
 - [x] Initial security policy and support-artifact secret/path linting for public evidence bundles.
+- [x] Public-artifact secret/path linting for manifests, readout metadata/provenance, report metadata, behavior/control metadata, strict bundle-loaded artifacts, and JLens lens-file paths.
 
 ### Remaining
 
@@ -60,7 +61,6 @@ This is now a useful artifact-contract and audit-card workbench, but it is not y
 - [ ] Executable intervention runtime for hookable toy modules before model-scale intervention claims.
 - [ ] Tokenizer-aware term mapping and lens-fit diagnostics.
 - [ ] Manual/canary real-model adapter workflow against a pinned tiny public checkpoint.
-- [ ] Security/reproducibility hardening for manifest, readout-provenance, and behavior/control metadata linting plus trust-boundary warnings.
 - [ ] Release-bundle automation with source archive, wheel/sdist, artifact README, and SHA256 sums.
 - [ ] Limes integration adapters for AutoResearch, EuroBench subsets, and `limes-nanogpt` checkpoints.
 - [ ] Static offline review visualization and schema registry/golden fixtures.
@@ -113,9 +113,9 @@ Exact decoded-token string matching is useful for fixtures, but too brittle for 
 
 Required:
 
-- Extend artifact secret/path linting to manifests, readout provenance, and behavior/control metadata, and add trust-boundary warnings.
 - Keep `trust_remote_code` and model-download risks explicit.
 - Add release-bundle automation with source archive, wheel/sdist, artifact README, and SHA256 sums.
+- Maintain public-artifact lint coverage as new schemas are added.
 
 Why it matters:
 

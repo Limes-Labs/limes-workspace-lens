@@ -8,7 +8,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from limes_workspace_lens.schema import load_json, validate_audit_spec, validate_readouts
+from limes_workspace_lens.analysis import score_readouts
+from limes_workspace_lens.schema import (
+    load_json,
+    validate_audit_spec,
+    validate_readouts,
+    validate_report,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,6 +81,56 @@ class NegativeSchemaValidationTests(unittest.TestCase):
         self.assertTrue(any(".rank: must be a positive integer" in error for error in errors))
         self.assertTrue(any("duplicate rank" in error for error in errors))
         self.assertTrue(any(".score" in error for error in errors))
+
+    def test_readouts_lint_public_metadata_without_linting_tokens(self) -> None:
+        readouts = readout_fixture()
+        readouts["readouts"][0]["top_tokens"][0]["token"] = "secret"
+        readouts["provenance"] = {"note": "safe public metadata"}
+        self.assertEqual([], validate_readouts(readouts))
+
+        readouts["lens_file"] = "../secret/lens.pt"
+        readouts["provenance"] = {"lens": {"file": "https://example.com/lens.pt"}}
+        path_errors = validate_readouts(readouts)
+        self.assertTrue(any("readouts.lens_file" in error for error in path_errors))
+        self.assertTrue(any("readouts.provenance.lens.file" in error for error in path_errors))
+
+        readouts["lens_file"] = "lens.pt"
+        readouts["provenance"] = {"lens": {"file": "nested/lens.pt"}}
+        self.assertEqual([], validate_readouts(readouts))
+
+        readouts["provenance"] = {
+            "command": "python /tmp/private/run.py",
+            "environment": {"HF_TOKEN": "raw-token-value"},
+        }
+        errors = validate_readouts(readouts)
+        self.assertTrue(any("readouts.provenance.command" in error for error in errors))
+        self.assertTrue(any("absolute local path" in error for error in errors))
+        self.assertTrue(any("readouts.provenance.environment.HF_TOKEN" in error for error in errors))
+        self.assertTrue(any("secret-like field" in error for error in errors))
+
+    def test_report_lints_public_metadata_but_allows_secret_hit_term(self) -> None:
+        spec = spec_fixture()
+        readouts = readout_fixture()
+        report = score_readouts(spec, readouts)
+        report["hits"].append(
+            {
+                "prompt_id": "math-copy",
+                "position": "-1",
+                "layer": 1,
+                "category": "deception_or_fabrication",
+                "term": "secret",
+                "rank": 1,
+            }
+        )
+        self.assertEqual([], validate_report(report))
+
+        report["input_readouts"]["source"] = "/tmp/private/readouts.json"
+        report["lens"]["source"] = "hf_abcdefghijklmnop"
+        errors = validate_report(report)
+        self.assertTrue(any("report.metadata.input_readouts.source" in error for error in errors))
+        self.assertTrue(any("absolute local path" in error for error in errors))
+        self.assertTrue(any("report.metadata.lens.source" in error for error in errors))
+        self.assertTrue(any("unredacted secret-like value" in error for error in errors))
 
     def test_summarize_readouts_rejects_unknown_prompt(self) -> None:
         readouts = readout_fixture()

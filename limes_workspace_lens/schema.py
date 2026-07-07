@@ -5,6 +5,7 @@ import math
 import re
 from pathlib import Path
 from pathlib import PurePosixPath
+from pathlib import PureWindowsPath
 from typing import Any
 
 
@@ -65,7 +66,7 @@ SECRET_VALUE_PATTERNS = [
     ),
 ]
 ABSOLUTE_LOCAL_PATH_PATTERN = re.compile(
-    r"(^|[\s:='\"])(/Users/|/home/|/private/|/var/folders/|/Volumes/|~[/\\]|file://|\\\\|[A-Za-z]:\\)"
+    r"(^|[\s:='\"])(/Users/|/home/|/mnt/|/nfs/|/private/|/scratch/|/tmp/|/var/folders/|/Volumes/|/gpfs/|~[/\\]|file://|\\\\|[A-Za-z]:\\)"
 )
 LENS_IDENTITY_KINDS = {"revision", "artifact", "adapter"}
 MUTABLE_REVISION_LABELS = {"head", "latest", "main", "master", "trunk"}
@@ -98,6 +99,24 @@ def write_jsonl(path: str | Path, rows: list[dict[str, Any]]) -> None:
         for row in rows:
             handle.write(json.dumps(row, sort_keys=True))
             handle.write("\n")
+
+
+def public_artifact_path_label(value: str | Path) -> str:
+    """Return a publishable label for a path while preserving relative artifact paths."""
+    text = str(value).strip()
+    if not text:
+        return text
+    if _looks_like_absolute_local_path(text):
+        return f"<local:{_path_leaf(text)}>"
+    return text
+
+
+def validate_public_artifact_strings(value: Any, where: str) -> list[str]:
+    return _validate_public_artifact_strings(value, where)
+
+
+def is_safe_relative_artifact_path(value: Any) -> bool:
+    return _safe_relative_path(value)
 
 
 def require_keys(data: dict[str, Any], keys: list[str], where: str) -> list[str]:
@@ -205,6 +224,13 @@ def validate_audit_spec(spec: dict[str, Any]) -> list[str]:
                 if isinstance(prompt_id, str) and prompt_ids and prompt_id not in prompt_ids:
                     errors.append(f"{where}.prompt_id: unknown prompt id {prompt_id!r}")
 
+    spec_metadata = {
+        key: spec[key]
+        for key in ["project", "model", "lens"]
+        if isinstance(spec.get(key), dict)
+    }
+    if spec_metadata:
+        errors.extend(validate_public_artifact_strings(spec_metadata, "spec.metadata"))
     return errors
 
 
@@ -263,6 +289,24 @@ def validate_readouts(readouts: dict[str, Any], spec: dict[str, Any] | None = No
                     errors.append(
                         f"{token_where}.{numeric_key}: must be a finite number when present"
                     )
+    metadata = {
+        key: readouts[key]
+        for key in ["source", "model", "lens_repo", "lens_file", "positions", "top_k"]
+        if key in readouts
+    }
+    if metadata:
+        errors.extend(validate_public_artifact_strings(metadata, "readouts.metadata"))
+    if "lens_file" in readouts and not _safe_relative_path(readouts.get("lens_file")):
+        errors.append("readouts.lens_file: must be a safe relative path")
+    if "provenance" in readouts:
+        provenance = readouts.get("provenance")
+        if not isinstance(provenance, dict):
+            errors.append("readouts.provenance: must be an object when present")
+        else:
+            lens = provenance.get("lens")
+            if isinstance(lens, dict) and "file" in lens and not _safe_relative_path(lens.get("file")):
+                errors.append("readouts.provenance.lens.file: must be a safe relative path")
+            errors.extend(validate_public_artifact_strings(provenance, "readouts.provenance"))
     return errors
 
 
@@ -317,6 +361,13 @@ def validate_report(report: dict[str, Any]) -> list[str]:
                     or row[count_key] < 0
                 ):
                     errors.append(f"{where}.{count_key}: must be a non-negative integer")
+    report_metadata = {
+        key: report[key]
+        for key in ["project", "model", "lens", "input_readouts"]
+        if isinstance(report.get(key), dict)
+    }
+    if report_metadata:
+        errors.extend(validate_public_artifact_strings(report_metadata, "report.metadata"))
     return errors
 
 
@@ -338,6 +389,7 @@ def validate_behavior_eval(
                 _validate_optional_string(row, "response_id", where, errors)
                 _validate_optional_string(row, "finish_reason", where, errors)
                 _validate_optional_string(row, "output_text", where, errors)
+                errors.extend(_validate_optional_public_fields(row, ["output_text"], where))
     return errors
 
 
@@ -403,6 +455,7 @@ def validate_control_eval(
                 errors.append(f"{where}.control_text_sha256: must be a SHA-256 hex digest")
             _validate_optional_string(row, "control_text", where, errors)
             _validate_optional_string(row, "output_text", where, errors)
+            errors.extend(_validate_optional_public_fields(row, ["control_text", "output_text"], where))
     return errors
 
 
@@ -465,7 +518,7 @@ def validate_command_log(artifact: dict[str, Any]) -> list[str]:
             if "environment" in command and not isinstance(command.get("environment"), dict):
                 errors.append(f"{where}.environment: must be an object when present")
 
-    errors.extend(_validate_public_artifact_strings(artifact, "command_log"))
+    errors.extend(validate_public_artifact_strings(artifact, "command_log"))
     return errors
 
 
@@ -521,7 +574,7 @@ def validate_compute_manifest(artifact: dict[str, Any]) -> list[str]:
     if "notes" in artifact and not _is_string_list(artifact.get("notes")):
         errors.append("compute_manifest.notes: must be a list of strings when present")
 
-    errors.extend(_validate_public_artifact_strings(artifact, "compute_manifest"))
+    errors.extend(validate_public_artifact_strings(artifact, "compute_manifest"))
     return errors
 
 
@@ -562,7 +615,7 @@ def validate_lens_artifact(artifact: dict[str, Any]) -> list[str]:
         if isinstance(revision, str) and revision.strip().lower() in MUTABLE_REVISION_LABELS:
             errors.append("lens_artifact.lens.revision: must be immutable, not a mutable label")
 
-    errors.extend(_validate_public_artifact_strings(artifact, "lens_artifact"))
+    errors.extend(validate_public_artifact_strings(artifact, "lens_artifact"))
     return errors
 
 
@@ -659,6 +712,14 @@ def _validate_eval_common(
             ).strip():
                 errors.append(f"{where}.model.{key}: must be a non-empty string")
     _validate_compatibility_object(artifact.get("compatibility"), where, errors)
+    if isinstance(artifact.get("model"), dict):
+        errors.extend(validate_public_artifact_strings(artifact["model"], f"{where}.model"))
+    if isinstance(artifact.get("compatibility"), dict):
+        errors.extend(
+            validate_public_artifact_strings(
+                artifact["compatibility"], f"{where}.compatibility"
+            )
+        )
     _validate_generation_object(artifact.get("generation"), where, errors)
     metric_names = _validate_metric_definitions(artifact.get("metric_definitions"), where, errors)
     _validate_eval_rows(
@@ -722,6 +783,10 @@ def _validate_generation_object(value: Any, where: str, errors: list[str]) -> No
         "responses_path", ""
     ).strip():
         errors.append(f"{where}.generation.responses_path: must be a non-empty string")
+    elif not _safe_relative_path_or_local_label(value.get("responses_path")):
+        errors.append(
+            f"{where}.generation.responses_path: must be a safe relative path or local path label"
+        )
     if not _valid_sha256(value.get("responses_sha256")):
         errors.append(f"{where}.generation.responses_sha256: must be a SHA-256 hex digest")
     seed = value.get("seed")
@@ -729,6 +794,7 @@ def _validate_generation_object(value: Any, where: str, errors: list[str]) -> No
         errors.append(f"{where}.generation.seed: must be null or a non-negative integer")
     if not isinstance(value.get("config"), dict):
         errors.append(f"{where}.generation.config: must be an object")
+    errors.extend(validate_public_artifact_strings(value, f"{where}.generation"))
 
 
 def _validate_metric_definitions(value: Any, where: str, errors: list[str]) -> set[str]:
@@ -879,7 +945,7 @@ def _validate_public_artifact_strings(value: Any, where: str) -> list[str]:
         if isinstance(item, str):
             if _contains_secret_like_value(item):
                 errors.append(f"{path}: contains unredacted secret-like value")
-            if ABSOLUTE_LOCAL_PATH_PATTERN.search(item):
+            if _looks_like_absolute_local_path(item):
                 errors.append(f"{path}: contains an absolute local path")
 
     walk(value, where)
@@ -928,10 +994,45 @@ def _is_secret_key_name(key: str) -> bool:
 def _safe_relative_path(value: Any) -> bool:
     if not isinstance(value, str) or not value.strip():
         return False
-    if "\\" in value or re.match(r"^[A-Za-z]:", value):
+    if "\\" in value or ":" in value or value.startswith("~") or re.match(r"^[A-Za-z]:", value):
         return False
     pure = PurePosixPath(value)
     return not pure.is_absolute() and ".." not in pure.parts
+
+
+def _safe_relative_path_or_local_label(value: Any) -> bool:
+    if isinstance(value, str) and _is_local_path_label(value):
+        return True
+    return _safe_relative_path(value)
+
+
+def _is_local_path_label(value: str) -> bool:
+    if not (value.startswith("<local:") and value.endswith(">")):
+        return False
+    label = value.removeprefix("<local:").removesuffix(">")
+    return bool(label) and "/" not in label and "\\" not in label and ":" not in label
+
+
+def _looks_like_absolute_local_path(value: str) -> bool:
+    if ABSOLUTE_LOCAL_PATH_PATTERN.search(value):
+        return True
+    stripped = value.strip().strip("'\"")
+    if Path(stripped).is_absolute():
+        return True
+    if PureWindowsPath(stripped).is_absolute():
+        return True
+    return False
+
+
+def _path_leaf(value: str) -> str:
+    stripped = value.strip().strip("'\"")
+    if stripped.startswith("file://"):
+        stripped = stripped.removeprefix("file://")
+    if "\\" in stripped or PureWindowsPath(stripped).is_absolute():
+        name = PureWindowsPath(stripped).name
+    else:
+        name = PurePosixPath(stripped).name
+    return name or "path"
 
 
 def _validate_optional_string(
@@ -942,6 +1043,17 @@ def _validate_optional_string(
 ) -> None:
     if key in row and row[key] is not None and not isinstance(row[key], str):
         errors.append(f"{where}.{key}: must be a string when present")
+
+
+def _validate_optional_public_fields(
+    row: dict[str, Any],
+    keys: list[str],
+    where: str,
+) -> list[str]:
+    public_fields = {key: row[key] for key in keys if key in row and isinstance(row[key], str)}
+    if not public_fields:
+        return []
+    return validate_public_artifact_strings(public_fields, where)
 
 
 def _valid_sha256(value: Any) -> bool:

@@ -49,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
         "validate-readouts", help="Validate a workspace readout artifact."
     )
     validate_readouts_parser.add_argument("readouts")
+    validate_readouts_parser.add_argument("--spec")
 
     validate_behavior = subparsers.add_parser(
         "validate-behavior-eval", help="Validate a behavior-eval artifact."
@@ -186,7 +187,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "validate-readouts":
             readouts = load_json(args.readouts)
-            ensure_valid(validate_readouts(readouts))
+            spec = load_json(args.spec) if args.spec else None
+            if spec is not None:
+                ensure_valid(validate_audit_spec(spec))
+            ensure_valid(validate_readouts(readouts, spec))
             print(f"valid: {args.readouts}")
             return 0
         if args.command == "validate-behavior-eval":

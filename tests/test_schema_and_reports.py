@@ -69,6 +69,12 @@ class CliWorkflowTests(unittest.TestCase):
             self.run_cli("validate-spec", "examples/workspace_audit_spec.json")
             self.run_cli("validate-readouts", "examples/synthetic_readouts.json")
             self.run_cli(
+                "validate-readouts",
+                "examples/synthetic_readouts.json",
+                "--spec",
+                "examples/workspace_audit_spec.json",
+            )
+            self.run_cli(
                 "summarize-readouts",
                 "examples/synthetic_readouts.json",
                 "--spec",
