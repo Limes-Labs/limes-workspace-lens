@@ -4,12 +4,13 @@ The goal is to make workspace-lens audits useful to model developers before atte
 
 For the engineering completion plan, see `docs/system-completion-plan.md`. That document is the source of truth for missing production components, focused PR order, and acceptance gates.
 
-## v0.1 - Audit Cards
+## v0.1 - Audit Cards And Artifact Contracts
 
-Status: initial implementation.
+Status: implemented foundation.
 
-- Dependency-free spec, readout, report, comparison, reflection-data, and intervention-plan schemas.
+- Dependency-free spec, readout, behavior-eval, control-eval, report, comparison, reflection-data, and intervention-plan schemas.
 - Evidence-bundle validation for diagnostic, mixed, negative, and verified result statuses.
+- Behavior/control artifact generation from saved output JSONL.
 - CPU smoke path on synthetic fixtures.
 - Optional `jlens` wrappers for real Hugging Face model environments.
 - Documentation for non-claims and trainer workflow.
@@ -30,8 +31,8 @@ Add one small open-weight replication package:
 - lens prompt corpus manifest;
 - readout artifact;
 - audit card;
-- behavior checks;
-- random-direction controls.
+- behavior-eval artifact from real saved model outputs;
+- control-eval artifact from real saved control outputs.
 
 Candidate model families:
 

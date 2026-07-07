@@ -23,7 +23,18 @@ Status labels should be backed by an evidence bundle, not assigned by prose alon
 python3 -m limes_workspace_lens validate-bundle results/run/evidence-bundle.json --root results/run --strict
 ```
 
-Use `--expected-status verified` before promoting a result as verified. Verified bundles must include behavior and control artifacts, command logs, compute manifests, preserved hashes, compatible settings, and non-synthetic readouts.
+Use `--expected-status verified` before promoting a result as verified. `mixed`, `negative`, and `verified` bundles require `--strict`; verified bundles must include passing behavior/control rows, command logs, compute manifests, preserved hashes, compatible settings, and non-synthetic readouts.
+
+Behavior and control artifacts can be generated from saved output JSONL without loading a model backend:
+
+```bash
+python3 -m limes_workspace_lens run-behavior-eval SPEC --responses outputs.jsonl --out behavior.json \
+  --tokenizer-revision TOKENIZER_REV --lens-revision LENS_REV --fit-procedure FIT_LABEL --position-policy POSITION_POLICY
+python3 -m limes_workspace_lens run-control-eval SPEC --responses controls.jsonl --control-kind prompt_variant --out control.json \
+  --tokenizer-revision TOKENIZER_REV --lens-revision LENS_REV --fit-procedure FIT_LABEL --position-policy POSITION_POLICY
+```
+
+These commands score preserved outputs. They are not model runners and do not prove that an intervention or random-direction control was executed.
 
 ## Minimum Real Claim
 

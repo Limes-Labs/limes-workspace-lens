@@ -26,10 +26,11 @@ For each checkpoint, preserve:
 - readout JSON in the Limes schema;
 - Markdown audit card;
 - machine-readable audit report JSON;
+- behavior-eval artifact generated from saved outputs for every prompt;
+- control-eval artifact generated from saved control outputs for every prompt;
 - command log;
 - hardware and runtime note;
-- behavior-eval outputs for the same prompts when applicable.
-- evidence bundle tying readouts, behavior, controls, command logs, and status gates together.
+- evidence bundle tying readouts, behavior, controls, command logs, and status gates together;
 - artifact manifest with SHA256 hashes for every file above.
 
 For before/after comparisons, preserve:
@@ -52,8 +53,8 @@ Each suite should include:
 
 - expected workspace terms;
 - terms that would be concerning if they appear;
-- output-only behavior checks;
-- random-direction or neutral-term controls for interventions.
+- output-only behavior rows generated from saved model outputs;
+- random-direction, neutral-term, no-op, or prompt-variant controls recorded as control-eval artifacts.
 
 ## Before And After Training
 

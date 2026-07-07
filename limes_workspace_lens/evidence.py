@@ -7,7 +7,17 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .comparison import COMPARISON_SCHEMA
-from .schema import AUDIT_SPEC_SCHEMA, INTERVENTION_SCHEMA, READOUT_SCHEMA, REPORT_SCHEMA, require_keys
+from .schema import (
+    AUDIT_SPEC_SCHEMA,
+    BEHAVIOR_EVAL_SCHEMA,
+    CONTROL_EVAL_SCHEMA,
+    INTERVENTION_SCHEMA,
+    READOUT_SCHEMA,
+    REPORT_SCHEMA,
+    require_keys,
+    validate_behavior_eval,
+    validate_control_eval,
+)
 
 
 EVIDENCE_BUNDLE_SCHEMA = "limes-workspace-lens/evidence-bundle.v0.1"
@@ -33,6 +43,8 @@ KNOWN_ARTIFACT_SCHEMAS = {
     "audit_report_json": REPORT_SCHEMA,
     "comparison_json": COMPARISON_SCHEMA,
     "intervention_plan": INTERVENTION_SCHEMA,
+    "behavior_eval": BEHAVIOR_EVAL_SCHEMA,
+    "control_eval": CONTROL_EVAL_SCHEMA,
 }
 
 BASE_REQUIRED_KINDS = {"audit_spec", "readouts", "audit_report_json"}
@@ -101,12 +113,13 @@ def validate_evidence_bundle(
 
     prompt_ids = _prompt_ids_from_loaded_specs(loaded_artifacts)
     pairings = bundle.get("pairings")
-    _validate_pairings(pairings, artifacts, prompt_ids, loaded_artifacts, errors)
+    pairing_prompt_ids = _validate_pairings(pairings, artifacts, prompt_ids, loaded_artifacts, errors)
 
     gate_results = _validate_status_gates(bundle.get("status_gates"), artifacts, errors)
     errors.extend(_validate_missing_evidence(bundle.get("missing_evidence"), artifacts))
     errors.extend(_validate_conflicting_findings(bundle.get("conflicting_findings"), artifacts))
     errors.extend(_validate_review(bundle.get("review")))
+    errors.extend(_validate_loaded_eval_artifacts(loaded_artifacts))
 
     if status in VALID_BUNDLE_STATUSES:
         errors.extend(
@@ -117,6 +130,8 @@ def validate_evidence_bundle(
                 artifacts,
                 gate_results,
                 loaded_artifacts,
+                prompt_ids,
+                pairing_prompt_ids,
                 strict,
             )
         )
@@ -423,6 +438,8 @@ def _validate_status_rules(
     artifacts: dict[str, dict[str, Any]],
     gate_results: dict[str, bool],
     loaded_artifacts: dict[str, dict[str, Any]],
+    prompt_ids: set[str],
+    pairing_prompt_ids: set[str],
     strict: bool,
 ) -> list[str]:
     errors: list[str] = []
@@ -441,6 +458,8 @@ def _validate_status_rules(
         return errors
 
     if status == "mixed":
+        if not strict:
+            errors.append("bundle.status: mixed validation requires --strict")
         errors.extend(
             _require_artifact_kinds(artifact_kinds, artifacts, BEHAVIOR_REQUIRED_KINDS, status)
         )
@@ -451,9 +470,12 @@ def _validate_status_rules(
         if not _has_conflict_relation(pairings):
             errors.append("bundle.pairings: mixed bundles need a conflict relation")
         errors.extend(_require_behavior_and_controls(pairings, status))
+        errors.extend(_require_pairing_prompt_coverage(prompt_ids, pairing_prompt_ids, status))
         return errors
 
     if status == "negative":
+        if not strict:
+            errors.append("bundle.status: negative validation requires --strict")
         errors.extend(
             _require_artifact_kinds(artifact_kinds, artifacts, BEHAVIOR_REQUIRED_KINDS, status)
         )
@@ -462,6 +484,7 @@ def _validate_status_rules(
         if not _has_failed_behavior_or_control_gate(gate_results):
             errors.append("bundle.status_gates: negative bundles need a failed behavior/control gate")
         errors.extend(_require_behavior_and_controls(pairings, status))
+        errors.extend(_require_pairing_prompt_coverage(prompt_ids, pairing_prompt_ids, status))
         return errors
 
     if status == "verified":
@@ -477,6 +500,8 @@ def _validate_status_rules(
         if failed_gates:
             errors.append(f"bundle.status_gates: verified gates failed {failed_gates}")
         errors.extend(_require_behavior_and_controls(pairings, status))
+        errors.extend(_require_pairing_prompt_coverage(prompt_ids, pairing_prompt_ids, status))
+        errors.extend(_require_eval_rows_passed(loaded_artifacts, status))
         errors.extend(_require_preserved_artifact_hashes(artifacts))
         errors.extend(_reject_synthetic_verified_readouts(loaded_artifacts))
         return errors
@@ -551,6 +576,46 @@ def _validate_loaded_compatibility(
     return errors
 
 
+def _validate_loaded_eval_artifacts(loaded_artifacts: dict[str, dict[str, Any]]) -> list[str]:
+    errors: list[str] = []
+    spec = _loaded_audit_spec(loaded_artifacts)
+    for artifact_id, artifact in loaded_artifacts.items():
+        schema_version = artifact.get("schema_version")
+        if schema_version == BEHAVIOR_EVAL_SCHEMA:
+            errors.extend(
+                f"artifact {artifact_id}: {error}" for error in validate_behavior_eval(artifact, spec)
+            )
+        if schema_version == CONTROL_EVAL_SCHEMA:
+            errors.extend(
+                f"artifact {artifact_id}: {error}" for error in validate_control_eval(artifact, spec)
+            )
+    return errors
+
+
+def _require_eval_rows_passed(
+    loaded_artifacts: dict[str, dict[str, Any]],
+    status: str,
+) -> list[str]:
+    errors: list[str] = []
+    for artifact_id, artifact in loaded_artifacts.items():
+        if artifact.get("schema_version") not in {BEHAVIOR_EVAL_SCHEMA, CONTROL_EVAL_SCHEMA}:
+            continue
+        rows = artifact.get("rows")
+        if not isinstance(rows, list):
+            continue
+        failed_prompts = sorted(
+            str(row.get("prompt_id"))
+            for row in rows
+            if isinstance(row, dict) and row.get("passed") is False
+        )
+        if failed_prompts:
+            errors.append(
+                f"bundle.artifacts[{artifact_id}]: {status} bundles require passing "
+                f"behavior/control rows, failed prompts {failed_prompts}"
+            )
+    return errors
+
+
 def _require_artifact_kinds(
     artifact_kinds: dict[str, set[str]],
     artifacts: dict[str, dict[str, Any]],
@@ -592,6 +657,19 @@ def _require_behavior_and_controls(pairings: Any, status: str) -> list[str]:
                 f"{status} bundles require controls"
             )
     return errors
+
+
+def _require_pairing_prompt_coverage(
+    prompt_ids: set[str],
+    pairing_prompt_ids: set[str],
+    status: str,
+) -> list[str]:
+    if not prompt_ids:
+        return []
+    missing = sorted(prompt_ids - pairing_prompt_ids)
+    if not missing:
+        return []
+    return [f"bundle.pairings: {status} bundles are missing prompt pairings {missing}"]
 
 
 def _require_preserved_artifact_hashes(artifacts: dict[str, dict[str, Any]]) -> list[str]:
@@ -652,6 +730,13 @@ def _prompt_ids_from_loaded_specs(loaded_artifacts: dict[str, dict[str, Any]]) -
                 if isinstance(prompt, dict) and _non_empty_string(prompt.get("id"))
             )
     return prompt_ids
+
+
+def _loaded_audit_spec(loaded_artifacts: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    for artifact in loaded_artifacts.values():
+        if artifact.get("schema_version") == AUDIT_SPEC_SCHEMA:
+            return artifact
+    return None
 
 
 def _prompt_ids_from_eval_artifact(artifact: dict[str, Any]) -> set[str]:
