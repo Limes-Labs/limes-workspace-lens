@@ -48,6 +48,8 @@ python3 -m limes_workspace_lens validate-spec runs/my-audit-spec.json
 python3 -m limes_workspace_lens export-prompts runs/my-audit-spec.json --out runs/prompts.jsonl
 ```
 
+Commands below that reference `examples/...` assume a source checkout. Installed-package users can start from `init-spec` and provide their own readout/output artifacts.
+
 Score a readout artifact:
 
 ```bash
@@ -175,6 +177,7 @@ Before committing a serious artifact, run:
 python3 -m unittest discover -s tests
 python3 -m py_compile limes_workspace_lens/*.py scripts/*.py
 ./scripts/run_smoke.sh
+./scripts/check_install.sh
 git diff --check
 ```
 

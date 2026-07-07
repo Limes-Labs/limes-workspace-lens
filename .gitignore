@@ -7,6 +7,7 @@ __pycache__/
 venv/
 runs/
 tmp/
+build/
 dist/
 *.egg-info/
 *.pt

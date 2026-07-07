@@ -32,7 +32,7 @@ The v0.1 repository now has:
 - hardened optional wrappers for `anthropics/jacobian-lens`;
 - synthetic fixtures used only for CI and onboarding;
 - README, non-claims, trainer workflow, and roadmap docs;
-- CI and integrated smoke tests.
+- CI, integrated smoke tests, and installed-package smoke tests.
 
 This is now a useful artifact-contract and audit-card workbench, but it is not yet a complete production-quality Jacobian-lens audit tool because it still lacks real open-weight evidence, executable interventions, tokenizer-aware diagnostics, and install/security hardening.
 
@@ -49,6 +49,7 @@ This is now a useful artifact-contract and audit-card workbench, but it is not y
 - [x] Integrated smoke path covering manifests, comparison, evidence bundle validation, and adapter help commands.
 - [x] Runnable `behavior-eval.v0.1` and `control-eval.v0.1` artifact generators from saved output JSONL.
 - [x] Strict behavior/control validators with prompt coverage, compatibility checks, and evidence-bundle integration.
+- [x] Package build, sdist/wheel install checks, console-script smoke outside the repo root, and Python 3.11/3.12 CI.
 
 ### Remaining
 
@@ -56,8 +57,8 @@ This is now a useful artifact-contract and audit-card workbench, but it is not y
 - [ ] Executable intervention runtime for hookable toy modules before model-scale intervention claims.
 - [ ] Tokenizer-aware term mapping and lens-fit diagnostics.
 - [ ] Manual/canary real-model adapter workflow against a pinned tiny public checkpoint.
-- [ ] Package build, wheel-install, and console-script CI.
 - [ ] Security/reproducibility hardening for secret/path linting, symlink escape checks, and command-log redaction.
+- [ ] Release-bundle automation with source archive, wheel/sdist, artifact README, and SHA256 sums.
 - [ ] Limes integration adapters for AutoResearch, EuroBench subsets, and `limes-nanogpt` checkpoints.
 - [ ] Static offline review visualization and schema registry/golden fixtures.
 
@@ -109,11 +110,9 @@ Exact decoded-token string matching is useful for fixtures, but too brittle for 
 
 Required:
 
-- Build and install wheel in CI.
-- Run console-script smoke outside the repo root.
-- Add Python version matrix.
 - Add `SECURITY.md`, artifact secret/path linter, command-log redaction rules, and symlink escape tests.
 - Keep `trust_remote_code` and model-download risks explicit.
+- Add release-bundle automation with source archive, wheel/sdist, artifact README, and SHA256 sums.
 
 Why it matters:
 
@@ -276,6 +275,7 @@ Every PR should run:
 python3 -m unittest discover -s tests
 python3 -m py_compile limes_workspace_lens/*.py scripts/*.py
 ./scripts/run_smoke.sh
+./scripts/check_install.sh
 git diff --check
 ```
 
