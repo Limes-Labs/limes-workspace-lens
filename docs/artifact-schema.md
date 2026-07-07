@@ -51,6 +51,7 @@ Each token row requires:
 
 Optional token fields:
 
+- `token_id`: non-negative tokenizer vocabulary id. Real readout exporters should include this so downstream attribution does not have to re-encode decoded token text.
 - `score`
 - `logit`
 - `probability`
@@ -221,7 +222,7 @@ Validate artifacts produced by external autograd tooling with:
 python3 -m limes_workspace_lens validate-gradient-attribution gradient-attribution.json --spec SPEC
 ```
 
-This schema is for real gradient-based interpretability artifacts such as input gradients, gradient-times-activation, integrated gradients, attention gradients, saliency, or logit-lens gradients. The repository validates the artifact contract; it does not compute gradients by itself.
+This schema is for real gradient-based interpretability artifacts such as input gradients, gradient-times-activation, integrated gradients, attention gradients, saliency, or logit-lens gradients. The repository also includes `scripts/run_gradient_attribution.py`, a narrow optional Hugging Face causal-LM runner that computes `gradient_x_activation` on input embeddings for selected readout-token targets. Other operators can still be produced by external tooling and validated through the same contract.
 
 Required top-level keys:
 
@@ -256,6 +257,8 @@ Required top-level keys:
 
 `input_artifacts` is a non-empty list of `{kind, path, sha256}` records. Paths must be safe relative paths or public local labels such as `<local:readouts.json>`.
 
+For evidence-bundle pairing, set `input_artifacts[].path` to the same relative path used by the bundle artifact entry, and set each row's `target.artifact_ref` to the paired readout artifact id.
+
 Each row links a prompt-position-layer target to ranked attribution features:
 
 - `row_id`: stable row identifier, unique within the artifact.
@@ -279,7 +282,7 @@ Each attribution requires:
 
 Optional attribution fields include `feature_position`, `feature_token_id`, `feature_text_sha256`, `layer`, and `token`. Scores must be finite; `abs_score` must be non-negative; `normalized_abs` must be between 0 and 1; ranks must be unique within a row.
 
-`quality.finite_values`, `quality.target_found_in_readouts`, and `quality.autograd_enabled` must be `true`. `quality.nonzero_total_attribution` must match the sum of absolute attribution scores. Zero-gradient rows are allowed when they are explicitly marked as zero evidence.
+`quality.finite_values`, `quality.target_found_in_readouts`, and `quality.autograd_enabled` must be `true`. `quality.nonzero_total_attribution` must match the sum of absolute attribution scores. Zero-gradient rows are allowed when they are explicitly marked as zero evidence. For the included HF runner, `normalized_abs` is full input-token L1 normalization, and `quality.completeness_delta` records the omitted attribution-mass fraction when top-k truncation hides lower-ranked tokens.
 
 Feature IDs and tokens are not secret-linted because real interpretability artifacts can legitimately contain strings such as `secret`, `token`, `fake`, or `Bearer`. Metadata, generation commands, input artifact paths, model fields, compatibility objects, targets, and conditions are still linted.
 

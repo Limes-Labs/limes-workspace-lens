@@ -22,6 +22,7 @@ Prefer:
 - "The audit card surfaces token-aligned workspace readouts."
 - "This is a hypothesis-generation signal."
 - "The readout changed after post-training under this prompt suite."
+- "The gradient-attribution artifact identifies input-token contributions to a selected target logit."
 - "The intervention plan needs behavior controls before interpretation."
 - "This result is synthetic, diagnostic, mixed, negative, or verified."
 
@@ -52,7 +53,8 @@ The minimum follow-up is:
 2. Compare against neutral prompts and random-direction controls.
 3. Check output behavior.
 4. Run a held-out prompt variant.
-5. Preserve the negative or mixed interpretation if controls fail.
+5. Inspect gradient-attribution rows when available, without treating them as causal proof.
+6. Preserve the negative or mixed interpretation if controls fail.
 
 ## Training Risks
 

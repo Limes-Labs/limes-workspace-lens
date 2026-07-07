@@ -14,6 +14,7 @@ python3 -m limes_workspace_lens validate-readouts examples/synthetic_readouts.js
 python3 -m limes_workspace_lens --help >/dev/null
 python3 scripts/fit_jlens.py --help >/dev/null
 python3 scripts/export_jlens_readouts.py --help >/dev/null
+python3 scripts/run_gradient_attribution.py --help >/dev/null
 cp examples/workspace_audit_spec.json "${TMP_DIR}/workspace_audit_spec.json"
 cp examples/synthetic_readouts.json "${TMP_DIR}/synthetic_readouts.json"
 python3 -m limes_workspace_lens export-prompts examples/workspace_audit_spec.json --out "${TMP_DIR}/prompts.jsonl"

@@ -20,10 +20,35 @@ class AdapterError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class OptionalDeps:
+class ModelDeps:
     torch: ModuleType
     transformers: ModuleType
+
+
+@dataclass(frozen=True)
+class OptionalDeps(ModelDeps):
     jlens: ModuleType
+
+
+def load_model_deps() -> ModelDeps:
+    missing: list[str] = []
+    modules: dict[str, ModuleType] = {}
+    for name in ["torch", "transformers"]:
+        try:
+            modules[name] = importlib.import_module(name)
+        except ImportError:
+            missing.append(name)
+    if missing:
+        raise AdapterError(
+            "missing optional real-model dependencies: "
+            + ", ".join(missing)
+            + ". Install the package with the real-model extra, for example "
+            + "`python3 -m pip install '.[real-model]'`."
+        )
+    return ModelDeps(
+        torch=modules["torch"],
+        transformers=modules["transformers"],
+    )
 
 
 def load_optional_deps() -> OptionalDeps:

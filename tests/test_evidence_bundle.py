@@ -13,6 +13,11 @@ from typing import Any
 from limes_workspace_lens.analysis import score_readouts
 from limes_workspace_lens.evidence import EVIDENCE_BUNDLE_SCHEMA, validate_evidence_bundle
 from limes_workspace_lens.eval_artifacts import build_behavior_eval, build_control_eval
+from limes_workspace_lens.gradient_attribution_runner import (
+    build_attribution_row,
+    build_gradient_attribution_artifact,
+    select_readout_targets,
+)
 from limes_workspace_lens.schema import (
     AUDIT_SPEC_SCHEMA,
     GRADIENT_ATTRIBUTION_SCHEMA,
@@ -115,6 +120,68 @@ class EvidenceBundleTests(unittest.TestCase):
             tmp_path = Path(tmp)
             bundle = build_bundle(tmp_path, status="diagnostic", synthetic=True)
             add_gradient_artifact(tmp_path, bundle, prompt_id="math-copy")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertEqual([], errors)
+
+    def test_diagnostic_bundle_accepts_runner_built_gradient_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="diagnostic", synthetic=True)
+            spec = load_json(tmp_path / "spec.json")
+            readouts = load_json(tmp_path / "readouts.json")
+            target = select_readout_targets(
+                readouts,
+                readout_rank=1,
+                prompt_ids={"math-copy"},
+                max_rows=1,
+            )[0]
+            row = build_attribution_row(
+                target=target,
+                target_token_id=101,
+                readout_artifact_id="readouts",
+                attributions=[
+                    {
+                        "rank": 1,
+                        "feature_type": "input_token",
+                        "feature_id": "input_token:0:101",
+                        "feature_position": 0,
+                        "feature_token_id": 101,
+                        "feature_text_sha256": "1" * 64,
+                        "signed_score": 0.8,
+                        "abs_score": 0.8,
+                        "normalized_abs": 0.8,
+                        "direction": "positive",
+                        "token": "fixture",
+                    }
+                ],
+            )
+            gradient = build_gradient_attribution_artifact(
+                spec=spec,
+                readouts_path=tmp_path / "readouts.json",
+                readouts_artifact_path="readouts.json",
+                readout_artifact_id="readouts",
+                rows=[row],
+                model=spec["model"]["name"],
+                model_checkpoint=bundle["compatibility"]["model_checkpoint"],
+                tokenizer_revision=bundle["compatibility"]["tokenizer_revision"],
+                lens_revision=bundle["compatibility"]["lens_revision"],
+                fit_procedure=bundle["compatibility"]["fit_procedure"],
+                position_policy=bundle["compatibility"]["position_policy"],
+                layer_policy=bundle["compatibility"]["layer_policy"],
+                prompt_suite_hash=bundle["compatibility"]["prompt_suite_hash"],
+                attribution_top_k=1,
+                seed=7,
+                device="cpu",
+                torch_dtype="float32",
+                model_revision=bundle["compatibility"]["model_checkpoint"],
+                local_files_only=True,
+                trust_remote_code=False,
+                allow_token_reencode=False,
+                readout_rank=1,
+                command="python3 scripts/run_gradient_attribution.py",
+            )
+            write_json(tmp_path / "gradient-attribution.json", gradient)
+            add_gradient_row(bundle)
             errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
         self.assertEqual([], errors)
 
