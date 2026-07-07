@@ -127,6 +127,7 @@ def main() -> int:
                                 "top_tokens": [
                                     {
                                         "token": tok.decode([int(token_id)]),
+                                        "token_id": int(token_id),
                                         "rank": rank + 1,
                                         "score": float(value),
                                     }

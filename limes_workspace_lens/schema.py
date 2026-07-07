@@ -306,6 +306,12 @@ def validate_readouts(readouts: dict[str, Any], spec: dict[str, Any] | None = No
                     errors.append(
                         f"{token_where}.{numeric_key}: must be a finite number when present"
                     )
+            if "token_id" in token and (
+                not isinstance(token.get("token_id"), int)
+                or isinstance(token.get("token_id"), bool)
+                or token.get("token_id") < 0
+            ):
+                errors.append(f"{token_where}.token_id: must be a non-negative integer when present")
     metadata = {
         key: readouts[key]
         for key in ["source", "model", "lens_repo", "lens_file", "positions", "top_k"]

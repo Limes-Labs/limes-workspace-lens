@@ -8,9 +8,11 @@ from unittest import mock
 
 from limes_workspace_lens.jlens_adapter import (
     AdapterError,
+    ModelDeps,
     OptionalDeps,
     build_provenance,
     choose_device,
+    load_model_deps,
     load_optional_deps,
     load_prompt_texts,
     parse_positions,
@@ -100,6 +102,28 @@ class JLensAdapterTests(unittest.TestCase):
         with mock.patch("importlib.import_module", side_effect=fake_import):
             with self.assertRaisesRegex(AdapterError, "torch, jlens"):
                 load_optional_deps()
+
+    def test_model_deps_do_not_require_jlens(self) -> None:
+        def fake_import(name: str):
+            if name == "jlens":
+                raise ImportError(name)
+            return SimpleNamespace(__version__=name)
+
+        with mock.patch("importlib.import_module", side_effect=fake_import):
+            deps = load_model_deps()
+        self.assertIsInstance(deps, ModelDeps)
+        self.assertEqual("torch", deps.torch.__version__)
+        self.assertEqual("transformers", deps.transformers.__version__)
+
+    def test_missing_model_deps_are_reported_without_jlens(self) -> None:
+        def fake_import(name: str):
+            if name == "torch":
+                raise ImportError(name)
+            return SimpleNamespace(__version__=name)
+
+        with mock.patch("importlib.import_module", side_effect=fake_import):
+            with self.assertRaisesRegex(AdapterError, "torch"):
+                load_model_deps()
 
     def test_set_seed_accepts_zero_and_rejects_negative(self) -> None:
         seen: list[int] = []

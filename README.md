@@ -14,6 +14,7 @@ The v0.1 slice is an audit-card and workflow layer. It can already:
 - validate evidence bundles that bind readouts to behavior artifacts, controls, command logs, compute manifests, and status gates;
 - generate and validate behavior/control artifacts from saved model-output JSONL without loading a model backend;
 - validate gradient-attribution artifacts from external autograd runners and pair them with strict evidence bundles;
+- compute diagnostic `gradient_x_activation` artifacts for selected readout tokens on Hugging Face causal LMs with a real PyTorch autograd runner;
 - export prompt suites for real lens fitting and application;
 - generate counterfactual-reflection JSONL candidates from a locked spec;
 - generate intervention plans for coordinate swaps or ablations;
@@ -26,6 +27,7 @@ The checked-in fixture is only for CI and onboarding. Serious model claims requi
 - `limes_workspace_lens/` - dependency-free schemas, report generation, comparison, reflection-data, and intervention-plan code.
 - `scripts/fit_jlens.py` - optional wrapper around `anthropics/jacobian-lens` for fitting a lens on Hugging Face causal LMs.
 - `scripts/export_jlens_readouts.py` - optional wrapper that applies a fitted `jlens` lens and exports the Limes readout schema.
+- `scripts/run_gradient_attribution.py` - optional PyTorch/Transformers runner that attributes selected readout-token logits to input tokens.
 - `examples/` - a starter audit spec, synthetic readouts, and saved-output JSONL fixtures for smoke tests.
 - `tests/` - unit and CLI workflow coverage.
 - `docs/` - trainer workflow, artifact schema, non-claims, completion plan, and roadmap.
@@ -161,6 +163,31 @@ python3 -m limes_workspace_lens summarize-readouts runs/qwen-small-readouts.json
   --out runs/qwen-small-audit-card.md \
   --json-out runs/qwen-small-audit-card.json
 ```
+
+Compute a diagnostic gradient-attribution artifact for selected readout targets:
+
+```bash
+python3 scripts/run_gradient_attribution.py \
+  --model Qwen/Qwen3-0.6B \
+  --model-revision <pinned-revision> \
+  --tokenizer-revision <pinned-tokenizer-revision> \
+  --spec examples/workspace_audit_spec.json \
+  --readouts runs/qwen-small-readouts.json \
+  --readouts-artifact-path qwen-small-readouts.json \
+  --readout-artifact-id readouts \
+  --out runs/qwen-small-gradient-attribution.json \
+  --lens-revision <pinned-lens-revision-or-artifact-id> \
+  --fit-procedure "jlens fit on exported prompt suite" \
+  --position-policy positions=-1 \
+  --readout-rank 1 \
+  --attribution-top-k 10 \
+  --max-rows 3
+python3 -m limes_workspace_lens validate-gradient-attribution \
+  runs/qwen-small-gradient-attribution.json \
+  --spec examples/workspace_audit_spec.json
+```
+
+The runner uses `gradient_x_activation` on input embeddings and targets the selected readout token's model logit at the same prompt position. New readout exports include `token_id`; for legacy readouts without token IDs, use `--allow-token-reencode` only when the decoded token maps back to exactly one tokenizer ID. The output is diagnostic evidence, not a causal intervention result or behavior claim.
 
 Model IDs above are examples. Prefer pinned revisions and `--local-files-only` for replay runs. The adapter records provenance fields such as checkpoint revisions, device, dtype, prompt count, positions, top-k, dependency versions, spec hash, and local lens hash when available.
 

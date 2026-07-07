@@ -28,6 +28,7 @@ For each checkpoint, preserve:
 - machine-readable audit report JSON;
 - behavior-eval artifact generated from saved outputs for every prompt;
 - control-eval artifact generated from saved control outputs for every prompt;
+- gradient-attribution artifact for selected readout targets when attributing which input tokens drove a target logit;
 - command log;
 - hardware and runtime note;
 - evidence bundle tying readouts, behavior, controls, command logs, and status gates together;
@@ -94,7 +95,7 @@ Do not put J-lens readout scores directly into a production reward or loss until
 
 - snapshot checkpoints periodically;
 - generate audit cards;
-- attach gradient-attribution artifacts from real autograd runs when they explain which internal features drove a readout target;
+- attach gradient-attribution artifacts from `scripts/run_gradient_attribution.py` or another real autograd runner when they explain which features drove a readout target;
 - route suspicious deltas to human review;
 - use counterfactual-reflection data as a separate experimental dataset;
 - test whether reflection data changes readouts and behavior in the intended direction.
