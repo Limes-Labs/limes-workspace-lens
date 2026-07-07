@@ -152,6 +152,60 @@ def validate_readouts(readouts: dict[str, Any]) -> list[str]:
     return errors
 
 
+def validate_report(report: dict[str, Any]) -> list[str]:
+    errors = require_keys(
+        report,
+        ["schema_version", "project", "model", "lens", "input_readouts", "top_k", "prompt_summaries"],
+        "report",
+    )
+    if report.get("schema_version") != REPORT_SCHEMA:
+        errors.append(
+            f"report: schema_version must be {REPORT_SCHEMA!r}, got {report.get('schema_version')!r}"
+        )
+    for key in ["project", "model", "lens", "input_readouts"]:
+        if key in report and not isinstance(report[key], dict):
+            errors.append(f"report.{key}: must be an object")
+    top_k = report.get("top_k")
+    if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0:
+        errors.append("report.top_k: must be a positive integer")
+    category_counts = report.get("category_counts", {})
+    if category_counts is not None:
+        if not isinstance(category_counts, dict):
+            errors.append("report.category_counts: must be an object")
+        else:
+            for category, count in category_counts.items():
+                if not isinstance(category, str):
+                    errors.append("report.category_counts: category names must be strings")
+                if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                    errors.append(f"report.category_counts.{category}: must be a non-negative integer")
+    prompt_summaries = report.get("prompt_summaries")
+    if not isinstance(prompt_summaries, list) or not prompt_summaries:
+        errors.append("report.prompt_summaries: must be a non-empty list")
+    else:
+        seen: set[str] = set()
+        for index, row in enumerate(prompt_summaries):
+            where = f"report.prompt_summaries[{index}]"
+            if not isinstance(row, dict):
+                errors.append(f"{where}: must be an object")
+                continue
+            errors.extend(require_keys(row, ["prompt_id", "status"], where))
+            prompt_id = row.get("prompt_id")
+            if not isinstance(prompt_id, str) or not prompt_id:
+                errors.append(f"{where}.prompt_id: must be a non-empty string")
+            elif prompt_id in seen:
+                errors.append(f"{where}.prompt_id: duplicate prompt id {prompt_id!r}")
+            else:
+                seen.add(prompt_id)
+            for count_key in ["expected_workspace_term_hits", "audit_term_hits"]:
+                if count_key in row and (
+                    not isinstance(row[count_key], int)
+                    or isinstance(row[count_key], bool)
+                    or row[count_key] < 0
+                ):
+                    errors.append(f"{where}.{count_key}: must be a non-negative integer")
+    return errors
+
+
 def ensure_valid(errors: list[str]) -> None:
     if errors:
         raise ValidationError("\n".join(errors))

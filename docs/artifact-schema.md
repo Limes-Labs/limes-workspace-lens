@@ -103,6 +103,8 @@ Only compare reports generated with compatible settings:
 - same position policy;
 - comparable lens fit procedure.
 
+The CLI fails closed when key settings differ. Use `--allow-incompatible` only for diagnostic inspection, and the generated comparison will record the incompatibilities.
+
 ## Counterfactual Reflection Data
 
 Schema: `limes-workspace-lens/reflection-jsonl.v0.1`
