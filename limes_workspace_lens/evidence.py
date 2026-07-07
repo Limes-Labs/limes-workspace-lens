@@ -19,10 +19,13 @@ from .schema import (
     REPORT_SCHEMA,
     require_keys,
     validate_behavior_eval,
+    validate_audit_spec,
     validate_command_log,
     validate_compute_manifest,
     validate_control_eval,
     validate_lens_artifact,
+    validate_readouts,
+    validate_report,
 )
 
 
@@ -595,6 +598,14 @@ def _validate_loaded_eval_artifacts(loaded_artifacts: dict[str, dict[str, Any]])
     spec = _loaded_audit_spec(loaded_artifacts)
     for artifact_id, artifact in loaded_artifacts.items():
         schema_version = artifact.get("schema_version")
+        if schema_version == AUDIT_SPEC_SCHEMA:
+            errors.extend(f"artifact {artifact_id}: {error}" for error in validate_audit_spec(artifact))
+        if schema_version == READOUT_SCHEMA:
+            errors.extend(
+                f"artifact {artifact_id}: {error}" for error in validate_readouts(artifact, spec)
+            )
+        if schema_version == REPORT_SCHEMA:
+            errors.extend(f"artifact {artifact_id}: {error}" for error in validate_report(artifact))
         if schema_version == BEHAVIOR_EVAL_SCHEMA:
             errors.extend(
                 f"artifact {artifact_id}: {error}" for error in validate_behavior_eval(artifact, spec)

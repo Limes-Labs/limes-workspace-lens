@@ -17,6 +17,7 @@ from limes_workspace_lens.jlens_adapter import (
     parse_torch_dtype,
     pretrained_kwargs,
     public_identifier,
+    safe_lens_file,
     set_seed,
     sha256_file,
 )
@@ -153,6 +154,22 @@ class JLensAdapterTests(unittest.TestCase):
 
     def test_public_identifier_leaves_remote_ids_intact(self) -> None:
         self.assertEqual("Qwen/Qwen3-0.6B", public_identifier("Qwen/Qwen3-0.6B"))
+
+    def test_lens_file_must_be_safe_relative_path(self) -> None:
+        self.assertEqual("nested/lens.pt", safe_lens_file("nested/lens.pt"))
+        for value in [
+            "",
+            "/tmp/lens.pt",
+            "../lens.pt",
+            "nested\\lens.pt",
+            "C:/Users/me/lens.pt",
+            "file:///Users/me/lens.pt",
+            "https://example.com/lens.pt",
+            "~/lens.pt",
+        ]:
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(AdapterError, "--lens-file"):
+                    safe_lens_file(value)
 
 
 def fake_torch(*, cuda: bool, mps: bool) -> SimpleNamespace:

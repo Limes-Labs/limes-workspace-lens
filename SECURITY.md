@@ -16,7 +16,9 @@ Before publishing evidence bundles:
 - validate command logs, compute manifests, and lens identity artifacts directly when iterating on them;
 - redact tokens and credentials as `<redacted>` or environment placeholders such as `<env:HF_TOKEN>`;
 - keep artifact paths bundle-relative;
-- avoid absolute local paths such as `/Users/...`, `/home/...`, `/private/...`, `file://...`, or Windows drive paths;
+- avoid absolute local paths such as `/Users/...`, `/home/...`, `/tmp/...`, `/scratch/...`, `/private/...`, `file://...`, or Windows drive paths;
 - preserve SHA256 hashes for artifacts required by a `verified` bundle.
 
-The validators reject common secret-like values and local path leaks in command logs, compute manifests, and lens identity artifacts. Broader public-artifact linting for manifests, readout provenance, and behavior/control metadata is tracked in the completion plan.
+The validators reject common secret-like values and local path leaks in command logs, compute manifests, lens identity artifacts, artifact manifests, readout metadata/provenance, report identity metadata, behavior/control generation metadata, and strict bundle-loaded artifacts. They intentionally avoid linting token readout rows, audit terms, and prompt text because those fields can legitimately contain security-like concepts under study.
+
+These checks are a guardrail, not a replacement for a private release review. Treat prompt corpora, raw model outputs, local checkpoint paths, `trust_remote_code` runs, and model downloads as trust-boundary events before publishing.

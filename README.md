@@ -186,12 +186,16 @@ For real model runs, also preserve the fitted lens artifact, readout JSON, audit
 Validate support artifacts directly while assembling a run:
 
 ```bash
+python3 -m limes_workspace_lens validate-readouts runs/readouts.json --spec runs/spec.json
+python3 -m limes_workspace_lens validate-behavior-eval runs/behavior.json --spec runs/spec.json
+python3 -m limes_workspace_lens validate-control-eval runs/control.json --spec runs/spec.json
+python3 -m limes_workspace_lens validate-manifest runs/artifact-manifest.json --root runs
 python3 -m limes_workspace_lens validate-command-log runs/command-log.json
 python3 -m limes_workspace_lens validate-compute-manifest runs/compute-manifest.json
 python3 -m limes_workspace_lens validate-lens-artifact runs/lens-identity.json
 ```
 
-See [SECURITY.md](SECURITY.md) before publishing command logs or evidence bundles.
+See [SECURITY.md](SECURITY.md) before publishing command logs, readout provenance, behavior/control artifacts, manifests, or evidence bundles.
 
 ## Completion Plan
 

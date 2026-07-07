@@ -26,6 +26,7 @@ from limes_workspace_lens.jlens_adapter import (
     pretrained_kwargs,
     public_identifier,
     require_positive_int,
+    safe_lens_file,
     set_seed,
 )
 
@@ -54,10 +55,16 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        from limes_workspace_lens.schema import READOUT_SCHEMA, load_json, validate_audit_spec
+        from limes_workspace_lens.schema import (
+            READOUT_SCHEMA,
+            load_json,
+            validate_audit_spec,
+            validate_readouts,
+        )
 
         deps = load_optional_deps()
         require_positive_int(args.top_k, "--top-k")
+        lens_file = safe_lens_file(args.lens_file)
         positions = parse_positions(args.positions)
         spec_path = Path(args.spec)
         spec = load_json(spec_path)
@@ -93,7 +100,7 @@ def main() -> int:
         except Exception as exc:
             raise AdapterError(f"tokenizer load failed for {args.model!r}: {exc}") from exc
         model = deps.jlens.from_hf(hf, tok)
-        lens_kwargs: dict[str, Any] = {"filename": args.lens_file}
+        lens_kwargs: dict[str, Any] = {"filename": lens_file}
         if args.lens_revision:
             lens_kwargs["revision"] = args.lens_revision
         try:
@@ -133,7 +140,7 @@ def main() -> int:
             model_revision=args.model_revision,
             tokenizer_revision=args.tokenizer_revision,
             lens_repo=args.lens_repo,
-            lens_file=args.lens_file,
+            lens_file=lens_file,
             lens_revision=args.lens_revision,
             spec_path=spec_path,
             prompt_count=len(spec["prompts"]),
@@ -150,17 +157,20 @@ def main() -> int:
             "schema_version": READOUT_SCHEMA,
             "source": (
                 f"jlens:{public_identifier(args.model)}:"
-                f"{public_identifier(args.lens_repo)}:{args.lens_file}"
+                f"{public_identifier(args.lens_repo)}:{lens_file}"
             ),
             "synthetic": False,
             "model": public_identifier(args.model),
             "lens_repo": public_identifier(args.lens_repo),
-            "lens_file": args.lens_file,
+            "lens_file": lens_file,
             "positions": positions,
             "top_k": args.top_k,
             "provenance": provenance,
             "readouts": rows,
         }
+        readout_errors = validate_readouts(output, spec)
+        if readout_errors:
+            raise AdapterError("\n".join(readout_errors))
         target = Path(args.out)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(output, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .schema import is_safe_relative_artifact_path, validate_public_artifact_strings
+
 
 MANIFEST_SCHEMA = "limes-workspace-lens/artifact-manifest.v0.1"
 
@@ -20,6 +22,9 @@ def build_manifest(
     metadata: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     root_path = Path(root).resolve()
+    public_field_errors = _validate_public_manifest_fields(commands or [], metadata or {})
+    if public_field_errors:
+        raise ValueError("\n".join(public_field_errors))
     records = []
     for file_path in files:
         path = Path(file_path).resolve()
@@ -56,6 +61,19 @@ def validate_manifest(manifest: dict[str, Any], *, root: str | Path | None = Non
             f"manifest.schema_version must be {MANIFEST_SCHEMA!r}, got {manifest.get('schema_version')!r}"
         )
     manifest_root = Path(root or manifest.get("root", ".")).resolve()
+
+    commands = manifest.get("commands", [])
+    if not isinstance(commands, list) or any(not isinstance(command, str) for command in commands):
+        errors.append("manifest.commands must be a list of strings")
+    metadata = manifest.get("metadata", {})
+    if not isinstance(metadata, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for key, value in metadata.items()
+    ):
+        errors.append("manifest.metadata must be an object with string keys and values")
+    else:
+        errors.extend(_validate_public_manifest_fields(commands, metadata))
+
     files = manifest.get("files")
     if not isinstance(files, list) or not files:
         errors.append("manifest.files must be a non-empty list")
@@ -74,6 +92,9 @@ def validate_manifest(manifest: dict[str, Any], *, root: str | Path | None = Non
         if path_value in seen:
             errors.append(f"{where}.path duplicates {path_value!r}")
         seen.add(path_value)
+        if not is_safe_relative_artifact_path(path_value):
+            errors.append(f"{where}.path must be a safe relative path")
+            continue
         try:
             path = _resolve_manifest_path(manifest_root, path_value)
         except ValueError as exc:
@@ -133,6 +154,16 @@ def parse_metadata(values: list[str] | None) -> dict[str, str]:
             raise ValueError(f"metadata key cannot be empty in {value!r}")
         parsed[key] = item_value
     return parsed
+
+
+def _validate_public_manifest_fields(commands: Any, metadata: Any) -> list[str]:
+    return validate_public_artifact_strings(
+        {
+            "commands": commands,
+            "metadata": metadata,
+        },
+        "manifest",
+    )
 
 
 def _relative_to_root(path: Path, root: Path) -> str:

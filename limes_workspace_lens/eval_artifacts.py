@@ -11,6 +11,7 @@ from .schema import (
     CONTROL_EVAL_KINDS,
     CONTROL_EVAL_SCHEMA,
     ValidationError,
+    public_artifact_path_label,
 )
 
 
@@ -117,7 +118,7 @@ def build_behavior_eval(
             "mode": "evaluate-saved-model-outputs",
             "command": command,
             "dependency_profile": "stdlib-only-no-model-execution",
-            "responses_path": responses_path,
+            "responses_path": public_artifact_path_label(responses_path),
             "responses_sha256": sha256_file(Path(responses_path)),
             "seed": seed,
             "config": generation_config or {},
@@ -168,7 +169,7 @@ def build_control_eval(
             "mode": "evaluate-saved-control-outputs",
             "command": command,
             "dependency_profile": "stdlib-only-no-model-execution",
-            "responses_path": responses_path,
+            "responses_path": public_artifact_path_label(responses_path),
             "responses_sha256": sha256_file(Path(responses_path)),
             "seed": seed,
             "config": generation_config or {},
