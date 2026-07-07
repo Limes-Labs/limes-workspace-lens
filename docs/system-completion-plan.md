@@ -19,103 +19,62 @@ The system is complete only when a user can:
 
 ## Current Baseline
 
-The v0.1 repository already has:
+The v0.1 repository now has:
 
-- dependency-free spec and readout validation;
+- dependency-free spec, readout, report, manifest, comparison, evidence-bundle, reflection-data, and intervention-plan validation;
 - audit-card generation from readout JSON;
-- checkpoint report comparison;
+- checkpoint report comparison with compatibility gates;
+- artifact manifests with SHA256 validation;
+- evidence-bundle validation for `diagnostic`, `mixed`, `negative`, and `verified` status rules;
 - counterfactual-reflection data generation;
 - intervention-plan generation;
-- optional wrappers for `anthropics/jacobian-lens`;
+- hardened optional wrappers for `anthropics/jacobian-lens`;
 - synthetic fixtures used only for CI and onboarding;
 - README, non-claims, trainer workflow, and roadmap docs;
-- CI and smoke tests.
+- CI and integrated smoke tests.
 
-This is a useful scaffold, but it is not yet a complete production-quality workbench.
+This is now a useful artifact-contract and audit-card workbench, but it is not yet a complete production-quality Jacobian-lens audit tool because it still lacks runnable behavior/control generation, real open-weight evidence, and executable interventions.
+
+## Live Todo
+
+### Done
+
+- [x] Public completion plan and workflow docs.
+- [x] Artifact manifest builder and validator.
+- [x] Comparison compatibility gates and `--allow-incompatible` diagnostics.
+- [x] Hardened spec/readout/report validation.
+- [x] Evidence-bundle validator with status gates and strict artifact checks.
+- [x] Real-model adapter hardening for optional dependency errors, pinned revisions, local replay flags, device preflight, and provenance.
+- [x] Integrated smoke path covering manifests, comparison, evidence bundle validation, and adapter help commands.
+
+### Remaining
+
+- [ ] Runnable `behavior-eval.v0.1` and `control-eval.v0.1` artifact generators.
+- [ ] One real open-weight replication pack with `synthetic=false` readouts, behavior artifacts, controls, manifests, command logs, compute manifest, and evidence bundle.
+- [ ] Executable intervention runtime for hookable toy modules before model-scale intervention claims.
+- [ ] Tokenizer-aware term mapping and lens-fit diagnostics.
+- [ ] Manual/canary real-model adapter workflow against a pinned tiny public checkpoint.
+- [ ] Package build, wheel-install, and console-script CI.
+- [ ] Security/reproducibility hardening for secret/path linting, symlink escape checks, and command-log redaction.
+- [ ] Limes integration adapters for AutoResearch, EuroBench subsets, and `limes-nanogpt` checkpoints.
+- [ ] Static offline review visualization and schema registry/golden fixtures.
 
 ## Missing Production Components
 
-### 1. Artifact Integrity Layer
+### 1. Runnable Behavior And Control Artifacts
 
 Required:
 
-- SHA256 manifests for specs, prompts, readouts, reports, comparisons, and behavior artifacts.
-- Manifest validation that fails when an artifact is missing or has changed.
-- Git commit, command, Python version, platform, and package metadata.
-- Explicit `synthetic=false` gating for real claims.
+- `run-behavior-eval` command that turns a locked audit spec into a behavior artifact.
+- `run-control-eval` command for random-direction, neutral-token, no-op, or prompt-variant controls.
+- Prompt coverage checks for every prompt in the claimed bundle.
+- Generation config, seed, model identity, metric definitions, and command log fields.
 
 Why it matters:
 
-Audit cards are only useful if a reviewer can trace every claim back to immutable files.
+Evidence bundles currently validate behavior/control artifacts when present, but the repo does not yet help users create those artifacts.
 
-### 2. Compatibility Gates For Comparisons
-
-Required:
-
-- Report schema validation.
-- Comparison refusal by default when prompt IDs, top-k, lens source, layer policy, tokenizer policy, or audit categories are incompatible.
-- `--allow-incompatible` escape hatch that records the incompatibility in the report.
-- Tests for incompatible prompt suites and top-k windows.
-
-Why it matters:
-
-Before/after comparisons can become misleading if the two reports were generated under different lens or prompt policies.
-
-### 3. Real-Model Adapter Hardening
-
-Required:
-
-- Optional dependency group documentation for real `jlens`, `torch`, and `transformers` use.
-- Import-time failure messages that explain exactly what to install.
-- Readout export tests using a fake in-process adapter, not a fake model claim.
-- Device handling tests for CPU-only environments.
-- Support for writing a model/lens manifest next to exported readouts.
-
-Why it matters:
-
-Researchers should not discover adapter fragility only after downloading model weights.
-
-### 4. Behavior Artifact Pairing
-
-Required:
-
-- Schema for behavior outputs linked to prompt IDs.
-- Audit-bundle validation requiring readouts plus behavior artifacts for non-diagnostic claims.
-- Result status rules: `diagnostic`, `mixed`, `negative`, `verified`.
-- Tests that reject `verified` status when controls or behavior artifacts are absent.
-
-Why it matters:
-
-Internal readouts are hypothesis-generation signals until tied to behavior and controls.
-
-### 5. Control And Intervention Execution
-
-Required:
-
-- Executable intervention hooks for compatible model wrappers.
-- Coordinate swap and ablation controls.
-- Random-direction and neutral-token controls.
-- Paired behavior summaries before and after intervention.
-- Tests on small hookable toy modules before any model-scale claim.
-
-Why it matters:
-
-The strongest evidence in the source literature is causal. The repo should eventually support causal tests, not only readout inspection.
-
-### 6. Visualization
-
-Required:
-
-- Static HTML or Markdown trace views for layer-by-position readouts.
-- Pinned-token trajectories.
-- Report links from audit card to raw rows.
-- Accessibility and offline rendering.
-
-Why it matters:
-
-Human review needs more than aggregate counts. Researchers need to inspect where terms appear and disappear.
-
-### 7. Open-Weight Replication Pack
+### 2. Open-Weight Replication Pack
 
 Required:
 
@@ -130,7 +89,61 @@ Why it matters:
 
 The repo should not claim real utility until it demonstrates at least one real open-weight audit from model internals.
 
-### 8. AutoResearch And Limes Integration
+### 3. Control And Intervention Execution
+
+Required:
+
+- Executable intervention hooks for compatible model wrappers.
+- Coordinate swap and ablation controls.
+- Random-direction and neutral-token controls.
+- Paired behavior summaries before and after intervention.
+- Tests on small hookable toy modules before any model-scale claim.
+
+Why it matters:
+
+The strongest evidence in the source literature is causal. The repo should eventually support causal tests, not only readout inspection.
+
+### 4. Tokenizer-Aware Term Mapping And Lens-Fit Diagnostics
+
+Required:
+
+- Tokenizer-aware aliases for leading-space, BPE, split-token, casing, and Unicode variants.
+- Multi-token concept matching for audit vocabularies.
+- Lens-fit diagnostic artifact recording fit corpus, held-out checks, seed, layer policy, and ablations.
+- Validation that model-family claims require fit-quality evidence.
+
+Why it matters:
+
+Exact decoded-token string matching is useful for fixtures, but too brittle for serious tokenizer-dependent claims.
+
+### 5. Packaging, Security, And Reproducibility Hardening
+
+Required:
+
+- Build and install wheel in CI.
+- Run console-script smoke outside the repo root.
+- Add Python version matrix.
+- Add `SECURITY.md`, artifact secret/path linter, command-log redaction rules, and symlink escape tests.
+- Keep `trust_remote_code` and model-download risks explicit.
+
+Why it matters:
+
+Model-development teams need the tool to install cleanly, avoid accidental data leaks, and preserve replayable artifacts.
+
+### 6. Visualization
+
+Required:
+
+- Static HTML or Markdown trace views for layer-by-position readouts.
+- Pinned-token trajectories.
+- Report links from audit card to raw rows.
+- Accessibility and offline rendering.
+
+Why it matters:
+
+Human review needs more than aggregate counts. Researchers need to inspect where terms appear and disappear.
+
+### 7. AutoResearch And Limes Integration
 
 Required:
 
@@ -186,11 +199,23 @@ Acceptance:
 - Incompatible comparisons fail loudly.
 - Compatible comparisons preserve current behavior.
 
-### PR 4: Behavior Artifact Pairing
+### PR 4: Schema And Readout Hardening
 
 Scope:
 
-- Add behavior-artifact schema.
+- Tighten spec, readout, and report validation.
+- Reject unknown prompt IDs during summarization.
+- Add negative schema tests.
+
+Acceptance:
+
+- Malformed artifacts fail loudly.
+- Existing examples remain valid.
+
+### PR 5: Evidence Bundle Validation
+
+Scope:
+
 - Add audit-bundle validation.
 - Add status-gate rules.
 - Add docs for `diagnostic`, `mixed`, `negative`, and `verified`.
@@ -200,7 +225,7 @@ Acceptance:
 - `verified` requires readouts, behavior artifact, controls, and manifest.
 - Synthetic fixtures cannot be marked verified.
 
-### PR 5: Real-Model Adapter Hardening
+### PR 6: Real-Model Adapter Hardening
 
 Scope:
 
@@ -214,7 +239,32 @@ Acceptance:
 - CPU-only tests pass.
 - Missing optional dependencies produce actionable errors.
 
-### PR 6: Open-Weight Replication Pack
+### PR 7: Integrated Landing Gate
+
+Scope:
+
+- Extend smoke coverage across merged command surfaces.
+- Validate a diagnostic evidence bundle in the smoke run.
+- Update this todo after merged foundations.
+
+Acceptance:
+
+- Smoke exercises manifest validation, evidence-bundle validation, comparison gates, and adapter help commands.
+
+### PR 8: Behavior And Control Artifact Generators
+
+Scope:
+
+- Add behavior/control artifact schemas and commands.
+- Keep default implementation deterministic and dependency-light.
+- Pair generated artifacts with evidence bundles.
+
+Acceptance:
+
+- Every prompt in a spec receives behavior/control rows.
+- Verified bundles fail when rows are missing.
+
+### PR 9: Open-Weight Replication Pack
 
 Scope:
 
