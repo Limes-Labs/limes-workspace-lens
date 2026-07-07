@@ -15,6 +15,23 @@ REPORT_SCHEMA = "limes-workspace-lens/report.v0.1"
 BEHAVIOR_EVAL_SCHEMA = "limes-workspace-lens/behavior-eval.v0.1"
 CONTROL_EVAL_SCHEMA = "limes-workspace-lens/control-eval.v0.1"
 CONTROL_EVAL_KINDS = {"random_direction", "neutral_token", "no_op", "prompt_variant"}
+GRADIENT_ATTRIBUTION_SCHEMA = "limes-workspace-lens/gradient-attribution.v0.1"
+GRADIENT_ATTRIBUTION_OPERATORS = {
+    "attention_gradient",
+    "gradient_x_activation",
+    "input_gradient",
+    "integrated_gradients",
+    "logit_lens_gradient",
+    "saliency",
+}
+GRADIENT_ATTRIBUTION_FEATURE_TYPES = {
+    "activation_coordinate",
+    "attention_head",
+    "input_token",
+    "neuron",
+    "readout_token",
+    "residual_stream",
+}
 REFLECTION_SCHEMA = "limes-workspace-lens/reflection-jsonl.v0.1"
 INTERVENTION_SCHEMA = "limes-workspace-lens/intervention-plan.v0.1"
 COMMAND_LOG_SCHEMA = "limes-workspace-lens/command-log.v0.1"
@@ -459,6 +476,92 @@ def validate_control_eval(
     return errors
 
 
+def validate_gradient_attribution(
+    artifact: dict[str, Any], spec: dict[str, Any] | None = None
+) -> list[str]:
+    errors = require_keys(
+        artifact,
+        [
+            "schema_version",
+            "generated_utc",
+            "source",
+            "synthetic",
+            "model",
+            "compatibility",
+            "attribution_compatibility",
+            "generation",
+            "input_artifacts",
+            "rows",
+        ],
+        "gradient_attribution",
+    )
+    if artifact.get("schema_version") != GRADIENT_ATTRIBUTION_SCHEMA:
+        errors.append(
+            "gradient_attribution: schema_version must be "
+            f"{GRADIENT_ATTRIBUTION_SCHEMA!r}, got {artifact.get('schema_version')!r}"
+        )
+    _validate_generated_utc(artifact.get("generated_utc"), "gradient_attribution", errors)
+    if not isinstance(artifact.get("source"), str) or not artifact.get("source", "").strip():
+        errors.append("gradient_attribution.source: must be a non-empty string")
+    else:
+        errors.extend(
+            validate_public_artifact_strings(
+                {"source": artifact["source"]}, "gradient_attribution"
+            )
+        )
+    if not isinstance(artifact.get("synthetic"), bool):
+        errors.append("gradient_attribution.synthetic: must be a boolean")
+
+    model = artifact.get("model")
+    if not isinstance(model, dict):
+        errors.append("gradient_attribution.model: must be an object")
+    else:
+        errors.extend(require_keys(model, ["id", "checkpoint"], "gradient_attribution.model"))
+        errors.extend(_require_non_empty_strings(model, ["id", "checkpoint"], "gradient_attribution.model"))
+        errors.extend(validate_public_artifact_strings(model, "gradient_attribution.model"))
+
+    _validate_compatibility_object(artifact.get("compatibility"), "gradient_attribution", errors)
+    if isinstance(artifact.get("compatibility"), dict):
+        errors.extend(
+            validate_public_artifact_strings(
+                artifact["compatibility"], "gradient_attribution.compatibility"
+            )
+        )
+    if isinstance(model, dict) and isinstance(artifact.get("compatibility"), dict):
+        model_checkpoint = model.get("checkpoint")
+        compatibility_checkpoint = artifact["compatibility"].get("model_checkpoint")
+        if (
+            isinstance(model_checkpoint, str)
+            and isinstance(compatibility_checkpoint, str)
+            and model_checkpoint != compatibility_checkpoint
+        ):
+            errors.append(
+                "gradient_attribution.model.checkpoint: must match "
+                "gradient_attribution.compatibility.model_checkpoint"
+            )
+
+    _validate_attribution_compatibility(artifact.get("attribution_compatibility"), errors)
+    _validate_gradient_generation(artifact.get("generation"), errors)
+    _validate_input_artifacts(artifact.get("input_artifacts"), "gradient_attribution.input_artifacts", errors)
+
+    attribution_compatibility = artifact.get("attribution_compatibility")
+    declared_feature_types = _declared_gradient_feature_types(attribution_compatibility)
+    attribution_top_k = (
+        attribution_compatibility.get("attribution_top_k")
+        if isinstance(attribution_compatibility, dict)
+        and _is_positive_int(attribution_compatibility.get("attribution_top_k"))
+        else None
+    )
+    _validate_gradient_rows(
+        artifact.get("rows"),
+        spec,
+        declared_feature_types,
+        attribution_top_k,
+        errors,
+    )
+    return errors
+
+
 def validate_command_log(artifact: dict[str, Any]) -> list[str]:
     errors = require_keys(
         artifact,
@@ -632,12 +735,43 @@ def _is_positive_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def _int_not_bool(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _string_or_int(value: Any) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        or isinstance(value, str)
+        and bool(value.strip())
+    )
+
+
 def _is_finite_number(value: Any) -> bool:
     return (
         isinstance(value, (int, float))
         and not isinstance(value, bool)
         and math.isfinite(value)
     )
+
+
+def _gradient_scores_are_consistent(
+    signed_score: float,
+    abs_score: float,
+    direction: str,
+) -> bool:
+    tolerance = 1e-9
+    signed_abs = abs(signed_score)
+    if direction == "mixed":
+        return abs_score + tolerance >= signed_abs and abs_score > tolerance
+    if abs(abs_score - signed_abs) > tolerance:
+        return False
+    if direction == "positive":
+        return signed_score > tolerance
+    if direction == "negative":
+        return signed_score < -tolerance
+    return signed_abs <= tolerance and abs_score <= tolerance
 
 
 def _is_layer_range(value: Any) -> bool:
@@ -909,6 +1043,397 @@ def _validate_metric_results(
         else:
             metric_passes[str(metric_name)] = metric["passed"]
     return metric_passes
+
+
+def _validate_attribution_compatibility(value: Any, errors: list[str]) -> None:
+    where = "gradient_attribution.attribution_compatibility"
+    if not isinstance(value, dict):
+        errors.append(f"{where}: must be an object")
+        return
+    errors.extend(
+        require_keys(
+            value,
+            [
+                "operator",
+                "target_policy",
+                "feature_types",
+                "attribution_top_k",
+                "rank_by",
+                "normalization",
+                "baseline_policy",
+                "hook_policy",
+                "autograd_backend",
+                "dtype",
+            ],
+            where,
+        )
+    )
+    for key in [
+        "target_policy",
+        "rank_by",
+        "normalization",
+        "baseline_policy",
+        "hook_policy",
+        "autograd_backend",
+        "dtype",
+    ]:
+        if not isinstance(value.get(key), str) or not value.get(key, "").strip():
+            errors.append(f"{where}.{key}: must be a non-empty string")
+    operator = value.get("operator")
+    if operator not in GRADIENT_ATTRIBUTION_OPERATORS:
+        errors.append(
+            f"{where}.operator: must be one of {sorted(GRADIENT_ATTRIBUTION_OPERATORS)}"
+        )
+    feature_types = value.get("feature_types")
+    if not isinstance(feature_types, list) or not feature_types:
+        errors.append(f"{where}.feature_types: must be a non-empty list")
+    else:
+        seen_feature_types: set[str] = set()
+        for index, feature_type in enumerate(feature_types):
+            if feature_type not in GRADIENT_ATTRIBUTION_FEATURE_TYPES:
+                errors.append(
+                    f"{where}.feature_types[{index}]: must be one of "
+                    f"{sorted(GRADIENT_ATTRIBUTION_FEATURE_TYPES)}"
+                )
+            elif feature_type in seen_feature_types:
+                errors.append(f"{where}.feature_types[{index}]: duplicate feature type {feature_type!r}")
+            else:
+                seen_feature_types.add(feature_type)
+    if not _is_positive_int(value.get("attribution_top_k")):
+        errors.append(f"{where}.attribution_top_k: must be a positive integer")
+    if "steps" in value and not _is_positive_int(value.get("steps")):
+        errors.append(f"{where}.steps: must be a positive integer when present")
+    if operator == "integrated_gradients":
+        baseline_policy = value.get("baseline_policy")
+        if not isinstance(baseline_policy, str) or baseline_policy.strip().lower() in {"", "none"}:
+            errors.append(f"{where}.baseline_policy: integrated_gradients requires a non-empty baseline policy")
+        if not _is_positive_int(value.get("steps")):
+            errors.append(f"{where}.steps: integrated_gradients requires a positive integer")
+    errors.extend(validate_public_artifact_strings(value, where))
+
+
+def _declared_gradient_feature_types(value: Any) -> set[str]:
+    if not isinstance(value, dict):
+        return set()
+    feature_types = value.get("feature_types")
+    if not isinstance(feature_types, list):
+        return set()
+    return {
+        item
+        for item in feature_types
+        if isinstance(item, str) and item in GRADIENT_ATTRIBUTION_FEATURE_TYPES
+    }
+
+
+def _validate_gradient_generation(value: Any, errors: list[str]) -> None:
+    where = "gradient_attribution.generation"
+    if not isinstance(value, dict):
+        errors.append(f"{where}: must be an object")
+        return
+    errors.extend(
+        require_keys(value, ["mode", "command", "dependency_profile", "seed", "config"], where)
+    )
+    for key in ["mode", "command", "dependency_profile"]:
+        if not isinstance(value.get(key), str) or not value.get(key, "").strip():
+            errors.append(f"{where}.{key}: must be a non-empty string")
+    seed = value.get("seed")
+    if seed is not None and (not isinstance(seed, int) or isinstance(seed, bool) or seed < 0):
+        errors.append(f"{where}.seed: must be null or a non-negative integer")
+    if not isinstance(value.get("config"), dict):
+        errors.append(f"{where}.config: must be an object")
+    errors.extend(validate_public_artifact_strings(value, where))
+
+
+def _validate_input_artifacts(value: Any, where: str, errors: list[str]) -> None:
+    if not isinstance(value, list) or not value:
+        errors.append(f"{where}: must be a non-empty list")
+        return
+    seen_paths: set[str] = set()
+    for index, item in enumerate(value):
+        item_where = f"{where}[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{item_where}: must be an object")
+            continue
+        errors.extend(require_keys(item, ["kind", "path", "sha256"], item_where))
+        if not isinstance(item.get("kind"), str) or not item.get("kind", "").strip():
+            errors.append(f"{item_where}.kind: must be a non-empty string")
+        path = item.get("path")
+        if not _safe_relative_path_or_local_label(path):
+            errors.append(f"{item_where}.path: must be a safe relative path or local path label")
+        elif path in seen_paths:
+            errors.append(f"{item_where}.path: duplicate input artifact path {path!r}")
+        else:
+            seen_paths.add(path)
+        if not _valid_sha256(item.get("sha256")):
+            errors.append(f"{item_where}.sha256: must be a SHA-256 hex digest")
+        errors.extend(validate_public_artifact_strings(item, item_where))
+
+
+def _validate_gradient_target(value: Any, where: str, errors: list[str]) -> None:
+    if not isinstance(value, dict):
+        errors.append(f"{where}: must be an object")
+        return
+    errors.extend(require_keys(value, ["kind"], where))
+    if not isinstance(value.get("kind"), str) or not value.get("kind", "").strip():
+        errors.append(f"{where}.kind: must be a non-empty string")
+    if "token" in value and value["token"] is not None and not isinstance(value["token"], str):
+        errors.append(f"{where}.token: must be a string or null when present")
+    if "rank" in value and not _is_positive_int(value.get("rank")):
+        errors.append(f"{where}.rank: must be a positive integer when present")
+    if "score" in value and not _is_finite_number(value.get("score")):
+        errors.append(f"{where}.score: must be a finite number when present")
+    if "position" in value and not _string_or_int(value.get("position")):
+        errors.append(f"{where}.position: must be a string or integer when present")
+    if "layer" in value and not _int_not_bool(value.get("layer")):
+        errors.append(f"{where}.layer: must be an integer when present")
+    public_target = {
+        key: value[key]
+        for key in ["kind", "description", "artifact_ref"]
+        if key in value
+    }
+    if public_target:
+        errors.extend(validate_public_artifact_strings(public_target, where))
+
+
+def _validate_gradient_condition(value: Any, where: str, errors: list[str]) -> None:
+    if not isinstance(value, dict):
+        errors.append(f"{where}: must be an object")
+        return
+    errors.extend(require_keys(value, ["kind"], where))
+    kind = value.get("kind")
+    if not isinstance(kind, str) or not kind.strip():
+        errors.append(f"{where}.kind: must be a non-empty string")
+    control_id = value.get("control_id")
+    if control_id is not None and (not isinstance(control_id, str) or not control_id.strip()):
+        errors.append(f"{where}.control_id: must be a non-empty string or null when present")
+    if isinstance(kind, str) and kind.strip() not in {"observed", "baseline"} and control_id is None:
+        errors.append(f"{where}.control_id: control conditions must name their control_id")
+    if "alignment_policy" in value and (
+        not isinstance(value.get("alignment_policy"), str) or not value.get("alignment_policy", "").strip()
+    ):
+        errors.append(f"{where}.alignment_policy: must be a non-empty string when present")
+    public_condition = {
+        key: value[key]
+        for key in ["kind", "control_id", "alignment_policy"]
+        if key in value
+    }
+    errors.extend(validate_public_artifact_strings(public_condition, where))
+
+
+def _validate_gradient_rows(
+    rows: Any,
+    spec: dict[str, Any] | None,
+    declared_feature_types: set[str],
+    attribution_top_k: int | None,
+    errors: list[str],
+) -> None:
+    known_prompt_ids = _prompt_ids(spec)
+    if not isinstance(rows, list) or not rows:
+        errors.append("gradient_attribution.rows: must be a non-empty list")
+        return
+    seen_row_ids: set[str] = set()
+    for index, row in enumerate(rows):
+        where = f"gradient_attribution.rows[{index}]"
+        if not isinstance(row, dict):
+            errors.append(f"{where}: must be an object")
+            continue
+        errors.extend(
+            require_keys(
+                row,
+                [
+                    "row_id",
+                    "prompt_id",
+                    "position",
+                    "layer",
+                    "target",
+                    "condition",
+                    "attributions",
+                    "quality",
+                ],
+                where,
+            )
+        )
+        row_id = row.get("row_id")
+        if not isinstance(row_id, str) or not row_id.strip():
+            errors.append(f"{where}.row_id: must be a non-empty string")
+        elif row_id in seen_row_ids:
+            errors.append(f"{where}.row_id: duplicate row id {row_id!r}")
+        else:
+            seen_row_ids.add(row_id)
+        prompt_id = row.get("prompt_id")
+        if not isinstance(prompt_id, str) or not prompt_id:
+            errors.append(f"{where}.prompt_id: must be a non-empty string")
+        else:
+            if known_prompt_ids and prompt_id not in known_prompt_ids:
+                errors.append(f"{where}.prompt_id: unknown prompt id {prompt_id!r}")
+        if not _string_or_int(row.get("position")):
+            errors.append(f"{where}.position: must be a string or integer")
+        if not _int_not_bool(row.get("layer")):
+            errors.append(f"{where}.layer: must be an integer")
+        _validate_gradient_target(row.get("target"), f"{where}.target", errors)
+        _validate_gradient_condition(row.get("condition"), f"{where}.condition", errors)
+        abs_total = _validate_gradient_attribution_entries(
+            row.get("attributions"),
+            where,
+            declared_feature_types,
+            attribution_top_k,
+            errors,
+        )
+        _validate_gradient_quality(row.get("quality"), where, abs_total, errors)
+
+
+def _validate_gradient_attribution_entries(
+    entries: Any,
+    where: str,
+    declared_feature_types: set[str],
+    attribution_top_k: int | None,
+    errors: list[str],
+) -> float | None:
+    if not isinstance(entries, list) or not entries:
+        errors.append(f"{where}.attributions: must be a non-empty list")
+        return None
+    valid = True
+    if attribution_top_k is not None and len(entries) > attribution_top_k:
+        errors.append(f"{where}.attributions: must not exceed attribution_top_k {attribution_top_k}")
+        valid = False
+    ranks: set[int] = set()
+    abs_total = 0.0
+    for index, item in enumerate(entries):
+        item_where = f"{where}.attributions[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{item_where}: must be an object")
+            valid = False
+            continue
+        errors.extend(
+            require_keys(
+                item,
+                [
+                    "rank",
+                    "feature_type",
+                    "feature_id",
+                    "signed_score",
+                    "abs_score",
+                    "normalized_abs",
+                    "direction",
+                ],
+                item_where,
+            )
+        )
+        feature_type = item.get("feature_type")
+        if feature_type not in GRADIENT_ATTRIBUTION_FEATURE_TYPES:
+            errors.append(
+                f"{item_where}.feature_type: must be one of "
+                f"{sorted(GRADIENT_ATTRIBUTION_FEATURE_TYPES)}"
+            )
+            valid = False
+        elif declared_feature_types and feature_type not in declared_feature_types:
+            errors.append(
+                f"{item_where}.feature_type: must be declared in "
+                "gradient_attribution.attribution_compatibility.feature_types"
+            )
+            valid = False
+        if not _string_or_int(item.get("feature_id")):
+            errors.append(f"{item_where}.feature_id: must be a non-empty string or integer")
+            valid = False
+        elif isinstance(item.get("feature_id"), str) and not item.get("feature_id", "").strip():
+            errors.append(f"{item_where}.feature_id: must be a non-empty string or integer")
+            valid = False
+        rank = item.get("rank")
+        if not _is_positive_int(rank):
+            errors.append(f"{item_where}.rank: must be a positive integer")
+            valid = False
+        elif rank in ranks:
+            errors.append(f"{item_where}.rank: duplicate rank {rank}")
+            valid = False
+        else:
+            ranks.add(rank)
+        signed_score = item.get("signed_score")
+        abs_score = item.get("abs_score")
+        direction = item.get("direction")
+        if not _is_finite_number(signed_score):
+            errors.append(f"{item_where}.signed_score: must be a finite number")
+            valid = False
+        if not _is_finite_number(abs_score):
+            errors.append(f"{item_where}.abs_score: must be a finite number")
+            valid = False
+        elif abs_score < 0:
+            errors.append(f"{item_where}.abs_score: must be non-negative")
+            valid = False
+        else:
+            abs_total += float(abs_score)
+        if not _is_finite_number(item.get("normalized_abs")):
+            errors.append(f"{item_where}.normalized_abs: must be a finite number")
+            valid = False
+        elif not 0 <= item["normalized_abs"] <= 1:
+            errors.append(f"{item_where}.normalized_abs: must be between 0 and 1")
+            valid = False
+        if direction not in {"positive", "negative", "zero", "mixed"}:
+            errors.append(f"{item_where}.direction: must be one of ['mixed', 'negative', 'positive', 'zero']")
+            valid = False
+        elif _is_finite_number(signed_score) and _is_finite_number(abs_score):
+            if not _gradient_scores_are_consistent(float(signed_score), float(abs_score), str(direction)):
+                errors.append(
+                    f"{item_where}.direction: must be consistent with signed_score and abs_score"
+                )
+                valid = False
+        if "feature_position" in item and not _string_or_int(item.get("feature_position")):
+            errors.append(f"{item_where}.feature_position: must be a string or integer when present")
+            valid = False
+        if "feature_token_id" in item and not _int_not_bool(item.get("feature_token_id")):
+            errors.append(f"{item_where}.feature_token_id: must be an integer when present")
+            valid = False
+        if "feature_text_sha256" in item and not _valid_sha256(item.get("feature_text_sha256")):
+            errors.append(f"{item_where}.feature_text_sha256: must be a SHA-256 hex digest when present")
+            valid = False
+        if "layer" in item and not _int_not_bool(item.get("layer")):
+            errors.append(f"{item_where}.layer: must be an integer when present")
+            valid = False
+        if "token" in item and item["token"] is not None and not isinstance(item["token"], str):
+            errors.append(f"{item_where}.token: must be a string or null when present")
+            valid = False
+    return abs_total if valid else None
+
+
+def _validate_gradient_quality(
+    value: Any,
+    where: str,
+    abs_total: float | None,
+    errors: list[str],
+) -> None:
+    quality_where = f"{where}.quality"
+    if not isinstance(value, dict):
+        errors.append(f"{quality_where}: must be an object")
+        return
+    errors.extend(
+        require_keys(
+            value,
+            [
+                "finite_values",
+                "target_found_in_readouts",
+                "autograd_enabled",
+                "nonzero_total_attribution",
+                "completeness_delta",
+            ],
+            quality_where,
+        )
+    )
+    for key in ["finite_values", "target_found_in_readouts", "autograd_enabled", "nonzero_total_attribution"]:
+        if not isinstance(value.get(key), bool):
+            errors.append(f"{quality_where}.{key}: must be a boolean")
+    if value.get("finite_values") is not True:
+        errors.append(f"{quality_where}.finite_values: must be true")
+    if value.get("target_found_in_readouts") is not True:
+        errors.append(f"{quality_where}.target_found_in_readouts: must be true")
+    if value.get("autograd_enabled") is not True:
+        errors.append(f"{quality_where}.autograd_enabled: must be true")
+    completeness_delta = value.get("completeness_delta")
+    if completeness_delta is not None and not _is_finite_number(completeness_delta):
+        errors.append(f"{quality_where}.completeness_delta: must be null or a finite number")
+    if abs_total is not None and isinstance(value.get("nonzero_total_attribution"), bool):
+        if value["nonzero_total_attribution"] and abs_total == 0:
+            errors.append(f"{quality_where}.nonzero_total_attribution: must be false when total attribution is zero")
+        if not value["nonzero_total_attribution"] and abs_total > 0:
+            errors.append(f"{quality_where}.nonzero_total_attribution: must be true when total attribution is non-zero")
 
 
 def _validate_generated_utc(value: Any, where: str, errors: list[str]) -> None:

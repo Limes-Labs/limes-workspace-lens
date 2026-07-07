@@ -15,6 +15,7 @@ from limes_workspace_lens.evidence import EVIDENCE_BUNDLE_SCHEMA, validate_evide
 from limes_workspace_lens.eval_artifacts import build_behavior_eval, build_control_eval
 from limes_workspace_lens.schema import (
     AUDIT_SPEC_SCHEMA,
+    GRADIENT_ATTRIBUTION_SCHEMA,
     READOUT_SCHEMA,
     REPORT_SCHEMA,
     load_json,
@@ -108,6 +109,95 @@ class EvidenceBundleTests(unittest.TestCase):
             bundle = build_bundle(tmp_path, status="verified", synthetic=False)
             errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
         self.assertEqual([], errors)
+
+    def test_diagnostic_bundle_accepts_optional_gradient_attribution_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="diagnostic", synthetic=True)
+            add_gradient_artifact(tmp_path, bundle, prompt_id="math-copy")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertEqual([], errors)
+
+    def test_strict_bundle_validates_loaded_gradient_attribution_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="diagnostic", synthetic=True)
+            gradient = gradient_attribution(
+                compatibility_from_spec(load_json(tmp_path / "spec.json")),
+                input_sha256=sha256(tmp_path / "readouts.json"),
+            )
+            gradient["rows"][0]["attributions"][0]["feature_type"] = "not-a-feature"
+            write_json(tmp_path / "gradient-attribution.json", gradient)
+            add_gradient_row(bundle)
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("artifact gradient" in error for error in errors))
+        self.assertTrue(any("feature_type" in error for error in errors))
+
+    def test_verified_bundle_rejects_synthetic_gradient_attribution_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            add_gradient_artifact(tmp_path, bundle, prompt_id="math-copy", synthetic=True)
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(
+            any(
+                "verified bundles cannot use synthetic gradient_attribution artifacts"
+                in error
+                for error in errors
+            )
+        )
+
+    def test_gradient_pairing_binds_to_paired_readout_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="diagnostic", synthetic=True)
+            gradient = gradient_attribution(
+                bundle["compatibility"],
+                input_sha256="0" * 64,
+            )
+            write_json(tmp_path / "gradient-attribution.json", gradient)
+            add_gradient_row(bundle)
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("readout SHA256 must match" in error for error in errors))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="diagnostic", synthetic=True)
+            gradient = gradient_attribution(
+                bundle["compatibility"],
+                input_sha256=sha256(tmp_path / "readouts.json"),
+            )
+            gradient["rows"][0]["target"]["artifact_ref"] = "missing-readouts"
+            write_json(tmp_path / "gradient-attribution.json", gradient)
+            add_gradient_row(bundle)
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("target.artifact_ref must equal paired readout" in error for error in errors))
+
+    def test_gradient_pairing_requires_kind_and_prompt_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="diagnostic", synthetic=True)
+            add_gradient_artifact(tmp_path, bundle, prompt_id="prompt-injection-check")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(
+            any(
+                "gradient_attribution_artifact_ids: referenced artifact has no row" in error
+                for error in errors
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="diagnostic", synthetic=True)
+            add_gradient_artifact(tmp_path, bundle, prompt_id="math-copy", kind="readouts")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(
+            any(
+                "gradient_attribution_artifact_ids: must reference gradient_attribution artifacts"
+                in error
+                for error in errors
+            )
+        )
 
     def test_mixed_bundle_requires_conflicting_findings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -572,6 +662,127 @@ def compatibility_from_spec(spec: dict[str, Any]) -> dict[str, Any]:
         "layer_policy": "workspace_layer_range=24-40",
         "position_policy": "positions=-1",
         "fit_procedure": "fixture-fit-procedure",
+    }
+
+
+def add_gradient_artifact(
+    root: Path,
+    bundle: dict[str, Any],
+    *,
+    prompt_id: str,
+    kind: str = "gradient_attribution",
+    synthetic: bool = False,
+) -> None:
+    gradient = gradient_attribution(
+        bundle["compatibility"],
+        prompt_id=prompt_id,
+        input_sha256=sha256(root / "readouts.json"),
+        synthetic=synthetic,
+    )
+    write_json(root / "gradient-attribution.json", gradient)
+    add_gradient_row(bundle, kind=kind)
+
+
+def add_gradient_row(bundle: dict[str, Any], *, kind: str = "gradient_attribution") -> None:
+    bundle["artifacts"].append(
+        {
+            "id": "gradient",
+            "kind": kind,
+            "path": "gradient-attribution.json",
+            "schema_version": GRADIENT_ATTRIBUTION_SCHEMA,
+            "required_for_status": False,
+        }
+    )
+    bundle["pairings"][0]["gradient_attribution_artifact_ids"] = ["gradient"]
+
+
+def gradient_attribution(
+    compatibility: dict[str, Any],
+    *,
+    prompt_id: str = "math-copy",
+    input_sha256: str = "0" * 64,
+    synthetic: bool = False,
+) -> dict[str, Any]:
+    return {
+        "schema_version": GRADIENT_ATTRIBUTION_SCHEMA,
+        "generated_utc": "2026-07-07T00:00:00Z",
+        "source": "gradient-attribution-fixture",
+        "synthetic": synthetic,
+        "model": {
+            "id": "fixture-model",
+            "checkpoint": compatibility["model_checkpoint"],
+        },
+        "compatibility": compatibility,
+        "attribution_compatibility": {
+            "operator": "gradient_x_activation",
+            "target_policy": "selected_readout_token",
+            "feature_types": ["residual_stream"],
+            "attribution_top_k": compatibility["top_k"],
+            "rank_by": "abs_score",
+            "normalization": "l1_abs",
+            "baseline_policy": "not_applicable",
+            "hook_policy": "residual_stream_pre_layer_norm",
+            "autograd_backend": "torch.func.grad",
+            "dtype": "float32",
+        },
+        "generation": {
+            "mode": "offline_autograd",
+            "command": "python -m workspace_lens_attribution run --config runs/config.json",
+            "dependency_profile": "torch-autograd",
+            "seed": 7,
+            "config": {"batch_size": 1},
+        },
+        "input_artifacts": [
+            {
+                "kind": "readouts",
+                "path": "readouts.json",
+                "sha256": input_sha256,
+            }
+        ],
+        "rows": [
+            {
+                "row_id": f"{prompt_id}:target-token:layer-32",
+                "prompt_id": prompt_id,
+                "position": -1,
+                "layer": 32,
+                "target": {
+                    "kind": "readout_token",
+                    "token": "49",
+                    "rank": 1,
+                    "score": 4.2,
+                    "description": "Top readout token attribution target.",
+                    "artifact_ref": "readouts",
+                },
+                "condition": {
+                    "kind": "observed",
+                    "control_id": None,
+                    "alignment_policy": "same_prompt_position",
+                },
+                "attributions": [
+                    {
+                        "rank": 1,
+                        "feature_type": "residual_stream",
+                        "feature_id": "layer32/residual:174",
+                        "feature_position": -1,
+                        "feature_token_id": 905,
+                        "feature_text_sha256": "1" * 64,
+                        "signed_score": 0.72,
+                        "abs_score": 0.72,
+                        "normalized_abs": 1.0,
+                        "direction": "positive",
+                        "layer": 32,
+                        "token": "49",
+                    }
+                ],
+                "quality": {
+                    "finite_values": True,
+                    "target_found_in_readouts": True,
+                    "autograd_enabled": True,
+                    "nonzero_total_attribution": True,
+                    "completeness_delta": 0.01,
+                },
+            }
+        ],
     }
 
 

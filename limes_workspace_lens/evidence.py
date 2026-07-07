@@ -13,6 +13,7 @@ from .schema import (
     COMMAND_LOG_SCHEMA,
     COMPUTE_MANIFEST_SCHEMA,
     CONTROL_EVAL_SCHEMA,
+    GRADIENT_ATTRIBUTION_SCHEMA,
     INTERVENTION_SCHEMA,
     LENS_ARTIFACT_SCHEMA,
     READOUT_SCHEMA,
@@ -23,6 +24,7 @@ from .schema import (
     validate_command_log,
     validate_compute_manifest,
     validate_control_eval,
+    validate_gradient_attribution,
     validate_lens_artifact,
     validate_readouts,
     validate_report,
@@ -54,6 +56,7 @@ KNOWN_ARTIFACT_SCHEMAS = {
     "intervention_plan": INTERVENTION_SCHEMA,
     "behavior_eval": BEHAVIOR_EVAL_SCHEMA,
     "control_eval": CONTROL_EVAL_SCHEMA,
+    "gradient_attribution": GRADIENT_ATTRIBUTION_SCHEMA,
     "command_log": COMMAND_LOG_SCHEMA,
     "compute_manifest": COMPUTE_MANIFEST_SCHEMA,
     "lens_artifact_or_revision": LENS_ARTIFACT_SCHEMA,
@@ -119,13 +122,20 @@ def validate_evidence_bundle(
     errors.extend(_validate_compatibility(compatibility))
 
     root_path = Path(root).resolve() if root is not None else None
-    artifacts, artifact_kinds, loaded_artifacts = _validate_artifacts(
+    artifacts, artifact_kinds, loaded_artifacts, artifact_hashes = _validate_artifacts(
         bundle.get("artifacts"), root_path, strict, errors
     )
 
     prompt_ids = _prompt_ids_from_loaded_specs(loaded_artifacts)
     pairings = bundle.get("pairings")
-    pairing_prompt_ids = _validate_pairings(pairings, artifacts, prompt_ids, loaded_artifacts, errors)
+    pairing_prompt_ids = _validate_pairings(
+        pairings,
+        artifacts,
+        prompt_ids,
+        loaded_artifacts,
+        artifact_hashes,
+        errors,
+    )
 
     gate_results = _validate_status_gates(bundle.get("status_gates"), artifacts, errors)
     errors.extend(_validate_missing_evidence(bundle.get("missing_evidence"), artifacts))
@@ -194,14 +204,20 @@ def _validate_artifacts(
     root: Path | None,
     strict: bool,
     errors: list[str],
-) -> tuple[dict[str, dict[str, Any]], dict[str, set[str]], dict[str, dict[str, Any]]]:
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, set[str]],
+    dict[str, dict[str, Any]],
+    dict[str, str],
+]:
     artifacts: dict[str, dict[str, Any]] = {}
     artifact_kinds: dict[str, set[str]] = {}
     loaded_artifacts: dict[str, dict[str, Any]] = {}
+    artifact_hashes: dict[str, str] = {}
 
     if not isinstance(artifact_rows, list) or not artifact_rows:
         errors.append("bundle.artifacts: must be a non-empty list")
-        return artifacts, artifact_kinds, loaded_artifacts
+        return artifacts, artifact_kinds, loaded_artifacts, artifact_hashes
 
     seen: set[str] = set()
     for index, artifact in enumerate(artifact_rows):
@@ -251,10 +267,12 @@ def _validate_artifacts(
             if strict:
                 errors.append(f"{where}.path: referenced path does not exist: {artifact.get('path')}")
             continue
+        computed_sha256 = _sha256(artifact_path)
+        artifact_hashes[artifact_id] = computed_sha256
         if artifact.get("sha256") is not None:
             if not _valid_sha256(artifact.get("sha256")):
                 errors.append(f"{where}.sha256: must be a lowercase SHA-256 hex digest")
-            elif _sha256(artifact_path) != artifact["sha256"]:
+            elif computed_sha256 != artifact["sha256"]:
                 errors.append(f"{where}.sha256: digest does not match referenced file")
         if _json_like_artifact(str(kind), artifact_path):
             try:
@@ -262,7 +280,7 @@ def _validate_artifacts(
             except ValueError as exc:
                 errors.append(f"{where}.path: {exc}")
 
-    return artifacts, artifact_kinds, loaded_artifacts
+    return artifacts, artifact_kinds, loaded_artifacts, artifact_hashes
 
 
 def _validate_pairings(
@@ -270,6 +288,7 @@ def _validate_pairings(
     artifacts: dict[str, dict[str, Any]],
     known_prompt_ids: set[str],
     loaded_artifacts: dict[str, dict[str, Any]],
+    artifact_hashes: dict[str, str],
     errors: list[str],
 ) -> set[str]:
     pairing_prompt_ids: set[str] = set()
@@ -334,12 +353,103 @@ def _validate_pairings(
                         "control_artifact_ids",
                         errors,
                     )
+        gradient_artifact_ids = pairing.get("gradient_attribution_artifact_ids", [])
+        if gradient_artifact_ids is not None:
+            if not isinstance(gradient_artifact_ids, list):
+                errors.append(f"{where}.gradient_attribution_artifact_ids: must be a list")
+            else:
+                for gradient_id in gradient_artifact_ids:
+                    if _artifact_ref(
+                        gradient_id,
+                        artifacts,
+                        where,
+                        "gradient_attribution_artifact_ids",
+                        errors,
+                    ):
+                        if artifacts[gradient_id].get("kind") != "gradient_attribution":
+                            errors.append(
+                                f"{where}.gradient_attribution_artifact_ids: "
+                                "must reference gradient_attribution artifacts"
+                            )
+                            continue
+                        _validate_prompt_coverage(
+                            loaded_artifacts.get(str(gradient_id)),
+                            prompt_id,
+                            where,
+                            "gradient_attribution_artifact_ids",
+                            errors,
+                        )
+                        _validate_gradient_pairing_binding(
+                            loaded_artifacts.get(str(gradient_id)),
+                            readout_artifact_id,
+                            artifacts,
+                            artifact_hashes,
+                            prompt_id,
+                            where,
+                            errors,
+                        )
         if not _non_empty_string(pairing.get("relation")):
             errors.append(f"{where}.relation: must be a non-empty string")
         if not _non_empty_string(pairing.get("notes")):
             errors.append(f"{where}.notes: must be a non-empty string")
 
     return pairing_prompt_ids
+
+
+def _validate_gradient_pairing_binding(
+    gradient_artifact: dict[str, Any] | None,
+    readout_artifact_id: Any,
+    artifacts: dict[str, dict[str, Any]],
+    artifact_hashes: dict[str, str],
+    prompt_id: Any,
+    where: str,
+    errors: list[str],
+) -> None:
+    if gradient_artifact is None or not _non_empty_string(prompt_id):
+        return
+    if not _non_empty_string(readout_artifact_id) or readout_artifact_id not in artifacts:
+        return
+    readout_artifact = artifacts[readout_artifact_id]
+    readout_path = readout_artifact.get("path")
+    readout_sha256 = artifact_hashes.get(readout_artifact_id)
+
+    if _non_empty_string(readout_path) and _valid_sha256(readout_sha256):
+        input_artifacts = gradient_artifact.get("input_artifacts")
+        matched_input = False
+        if isinstance(input_artifacts, list):
+            for item in input_artifacts:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("kind") != readout_artifact.get("kind"):
+                    continue
+                if item.get("path") != readout_path:
+                    continue
+                matched_input = True
+                if item.get("sha256") != readout_sha256:
+                    errors.append(
+                        f"{where}.gradient_attribution_artifact_ids: "
+                        "gradient input_artifacts readout SHA256 must match paired readout artifact"
+                    )
+        if not matched_input:
+            errors.append(
+                f"{where}.gradient_attribution_artifact_ids: "
+                "gradient input_artifacts must include the paired readout artifact path and kind"
+            )
+
+    rows = gradient_artifact.get("rows")
+    if not isinstance(rows, list):
+        return
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict) or row.get("prompt_id") != prompt_id:
+            continue
+        target = row.get("target")
+        if not isinstance(target, dict):
+            continue
+        if target.get("artifact_ref") != readout_artifact_id:
+            errors.append(
+                f"{where}.gradient_attribution_artifact_ids: "
+                f"gradient row {index} target.artifact_ref must equal paired readout_artifact_id"
+            )
 
 
 def _validate_status_gates(
@@ -521,6 +631,7 @@ def _validate_status_rules(
         errors.extend(_require_command_logs_succeeded(loaded_artifacts, status))
         errors.extend(_require_preserved_artifact_hashes(artifacts))
         errors.extend(_reject_synthetic_verified_readouts(loaded_artifacts))
+        errors.extend(_reject_synthetic_verified_gradient_attributions(loaded_artifacts))
         return errors
 
     return errors
@@ -613,6 +724,11 @@ def _validate_loaded_eval_artifacts(loaded_artifacts: dict[str, dict[str, Any]])
         if schema_version == CONTROL_EVAL_SCHEMA:
             errors.extend(
                 f"artifact {artifact_id}: {error}" for error in validate_control_eval(artifact, spec)
+            )
+        if schema_version == GRADIENT_ATTRIBUTION_SCHEMA:
+            errors.extend(
+                f"artifact {artifact_id}: {error}"
+                for error in validate_gradient_attribution(artifact, spec)
             )
         if schema_version == COMMAND_LOG_SCHEMA:
             errors.extend(f"artifact {artifact_id}: {error}" for error in validate_command_log(artifact))
@@ -745,6 +861,22 @@ def _reject_synthetic_verified_readouts(loaded_artifacts: dict[str, dict[str, An
     return errors
 
 
+def _reject_synthetic_verified_gradient_attributions(
+    loaded_artifacts: dict[str, dict[str, Any]]
+) -> list[str]:
+    errors: list[str] = []
+    for artifact_id, artifact in loaded_artifacts.items():
+        if (
+            artifact.get("schema_version") == GRADIENT_ATTRIBUTION_SCHEMA
+            and artifact.get("synthetic") is True
+        ):
+            errors.append(
+                f"bundle.artifacts[{artifact_id}]: "
+                "verified bundles cannot use synthetic gradient_attribution artifacts"
+            )
+    return errors
+
+
 def _has_conflict_relation(pairings: Any) -> bool:
     if not isinstance(pairings, list):
         return False
@@ -841,6 +973,7 @@ def _json_like_artifact(kind: str, path: Path) -> bool:
         "readouts",
         "behavior_eval",
         "control_eval",
+        "gradient_attribution",
         "compute_manifest",
     } or path.suffix == ".json"
 

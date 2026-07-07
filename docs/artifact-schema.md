@@ -211,6 +211,78 @@ The current generator records and validates saved controls; it does not claim th
 
 As with behavior evals, absolute input response paths are stored as public `<local:...>` labels while the input file hash is preserved. Included `control_text` and `output_text` fields are linted when present.
 
+## Gradient Attribution
+
+Schema: `limes-workspace-lens/gradient-attribution.v0.1`
+
+Validate artifacts produced by external autograd tooling with:
+
+```bash
+python3 -m limes_workspace_lens validate-gradient-attribution gradient-attribution.json --spec SPEC
+```
+
+This schema is for real gradient-based interpretability artifacts such as input gradients, gradient-times-activation, integrated gradients, attention gradients, saliency, or logit-lens gradients. The repository validates the artifact contract; it does not compute gradients by itself.
+
+Required top-level keys:
+
+- `schema_version`
+- `generated_utc`
+- `source`
+- `synthetic`
+- `model`
+- `compatibility`
+- `attribution_compatibility`
+- `generation`
+- `input_artifacts`
+- `rows`
+
+`model` records an `id` and immutable `checkpoint`. `compatibility` uses the same fields as behavior/control artifacts: model checkpoint, tokenizer revision, lens source/revision, prompt suite hash, top-k, layer policy, position policy, and fit procedure.
+
+`attribution_compatibility` records gradient-specific settings:
+
+- `operator`: one of `attention_gradient`, `gradient_x_activation`, `input_gradient`, `integrated_gradients`, `logit_lens_gradient`, or `saliency`.
+- `target_policy`: how the target logit/readout/token was chosen.
+- `feature_types`: non-empty list drawn from `activation_coordinate`, `attention_head`, `input_token`, `neuron`, `readout_token`, and `residual_stream`.
+- `attribution_top_k`
+- `rank_by`
+- `normalization`
+- `baseline_policy`
+- `hook_policy`
+- `autograd_backend`
+- `dtype`
+- `steps`: required for `integrated_gradients`; optional for other operators.
+
+`generation` records `mode`, `command`, `dependency_profile`, `seed`, and `config`. Commands and config are linted for common secret-like values and absolute local paths.
+
+`input_artifacts` is a non-empty list of `{kind, path, sha256}` records. Paths must be safe relative paths or public local labels such as `<local:readouts.json>`.
+
+Each row links a prompt-position-layer target to ranked attribution features:
+
+- `row_id`: stable row identifier, unique within the artifact.
+- `prompt_id`: must be known when `--spec` is supplied.
+- `position`
+- `layer`
+- `target`: at least `kind`, with optional `token`, `rank`, `score`, `description`, and `artifact_ref`.
+- `condition`: at least `kind`; control conditions must include `control_id`.
+- `attributions`: non-empty ranked list.
+- `quality`: finite/autograd/linkage checks.
+
+Each attribution requires:
+
+- `rank`
+- `feature_type`
+- `feature_id`
+- `signed_score`
+- `abs_score`
+- `normalized_abs`
+- `direction`: `positive`, `negative`, `zero`, or `mixed`
+
+Optional attribution fields include `feature_position`, `feature_token_id`, `feature_text_sha256`, `layer`, and `token`. Scores must be finite; `abs_score` must be non-negative; `normalized_abs` must be between 0 and 1; ranks must be unique within a row.
+
+`quality.finite_values`, `quality.target_found_in_readouts`, and `quality.autograd_enabled` must be `true`. `quality.nonzero_total_attribution` must match the sum of absolute attribution scores. Zero-gradient rows are allowed when they are explicitly marked as zero evidence.
+
+Feature IDs and tokens are not secret-linted because real interpretability artifacts can legitimately contain strings such as `secret`, `token`, `fake`, or `Bearer`. Metadata, generation commands, input artifact paths, model fields, compatibility objects, targets, and conditions are still linted.
+
 ## Artifact Manifest
 
 Schema: `limes-workspace-lens/artifact-manifest.v0.1`
@@ -292,9 +364,12 @@ Recommended artifact `kind` values:
 - `comparison_markdown`
 - `behavior_eval`
 - `control_eval`
+- `gradient_attribution`
 - `command_log`
 - `compute_manifest`
 - `lens_artifact_or_revision`
+
+Prompt pairings may include optional `gradient_attribution_artifact_ids`. Strict validation checks that those IDs reference `gradient_attribution` artifacts, that each referenced artifact has at least one row for the paired prompt, that each paired row targets the paired readout artifact through `target.artifact_ref`, and that `input_artifacts` includes the paired readout artifact's kind, path, and SHA256. Verified bundles cannot reference synthetic gradient-attribution artifacts.
 
 ## Command Log
 

@@ -21,7 +21,7 @@ The system is complete only when a user can:
 
 The v0.1 repository now has:
 
-- dependency-free spec, readout, behavior-eval, control-eval, report, manifest, comparison, evidence-bundle, reflection-data, and intervention-plan validation;
+- dependency-free spec, readout, behavior-eval, control-eval, gradient-attribution, report, manifest, comparison, evidence-bundle, reflection-data, and intervention-plan validation;
 - audit-card generation from readout JSON;
 - behavior/control artifact generation from saved model-output JSONL;
 - checkpoint report comparison with compatibility gates;
@@ -54,10 +54,12 @@ This is now a useful artifact-contract and audit-card workbench, but it is not y
 - [x] Verified-bundle support schemas for command logs, compute manifests, and lens artifact identity, with direct CLI validators.
 - [x] Initial security policy and support-artifact secret/path linting for public evidence bundles.
 - [x] Public-artifact secret/path linting for manifests, readout metadata/provenance, report metadata, behavior/control metadata, strict bundle-loaded artifacts, and JLens lens-file paths.
+- [x] Gradient-attribution artifact contract with CLI validation, strict evidence-bundle pairing, smoke coverage, documentation, and public metadata hygiene.
 
 ### Remaining
 
 - [ ] One real open-weight replication pack with `synthetic=false` readouts, behavior artifacts, controls, manifests, command logs, compute manifest, and evidence bundle.
+- [ ] Executable gradient-attribution runner for at least one pinned open-weight model backend.
 - [ ] Executable intervention runtime for hookable toy modules before model-scale intervention claims.
 - [ ] Tokenizer-aware term mapping and lens-fit diagnostics.
 - [ ] Manual/canary real-model adapter workflow against a pinned tiny public checkpoint.
@@ -257,7 +259,22 @@ Acceptance:
 
 Status: merged in this slice.
 
-### PR 9: Open-Weight Replication Pack
+### PR 9: Gradient Attribution Artifact Contract
+
+Scope:
+
+- Add a public schema for gradient-based attribution evidence produced by external autograd runners.
+- Validate method settings, target linkage, feature attributions, row quality, input artifact hashes, and public metadata hygiene.
+- Pair optional gradient artifacts into strict evidence bundles.
+
+Acceptance:
+
+- CLI and strict bundle validation reject malformed attribution rows, bad provenance, unknown prompts, and prompt-coverage mismatches.
+- Smoke and install checks exercise the command without claiming real model evidence.
+
+Status: merged in this slice.
+
+### PR 10: Open-Weight Replication Pack
 
 Scope:
 
