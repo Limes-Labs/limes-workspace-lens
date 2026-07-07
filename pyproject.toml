@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "limes-workspace-lens"
+version = "0.1.0"
+description = "Reproducible audit and training-workflow scaffolds for Jacobian-lens workspace readouts."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [
+  { name = "Francesco Giannicola" },
+  { name = "Limes Labs" }
+]
+dependencies = []
+
+[project.scripts]
+limes-workspace-lens = "limes_workspace_lens.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["limes_workspace_lens*"]

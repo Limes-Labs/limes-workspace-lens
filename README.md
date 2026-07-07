@@ -1,0 +1,131 @@
+# Limes Workspace Lens
+
+Limes Workspace Lens is a public Limes Labs workbench for auditing Jacobian-lens and J-space style readouts in open-weight language models. The practical question is narrow: when a team pretrains, fine-tunes, merges, or post-trains a model, can it produce reproducible audit cards showing whether token-aligned internal workspace signals changed in ways that output-only evals may miss?
+
+This repository is not a claim that a model is conscious, deceptive, aligned, or improved. It is a tool for making internal-readout evidence reviewable: specs, prompt suites, readout schemas, checkpoint comparisons, counterfactual-reflection data candidates, intervention plans, and result cards.
+
+## Current Status
+
+The v0.1 slice is an audit-card and workflow layer. It can already:
+
+- validate public audit specs and readout artifacts;
+- summarize top-k Jacobian-lens readouts into JSON and Markdown audit cards;
+- compare two checkpoint reports with compatible lens settings;
+- export prompt suites for real lens fitting and application;
+- generate counterfactual-reflection JSONL candidates from a locked spec;
+- generate intervention plans for coordinate swaps or ablations;
+- run a dependency-free CPU smoke path on synthetic fixtures.
+
+The checked-in fixture is only for CI and onboarding. Serious model claims require real readouts from a fitted lens, paired behavior tests, controls, and a model/lens/compute manifest.
+
+## What Is Here
+
+- `limes_workspace_lens/` - dependency-free schemas, report generation, comparison, reflection-data, and intervention-plan code.
+- `scripts/fit_jlens.py` - optional wrapper around `anthropics/jacobian-lens` for fitting a lens on Hugging Face causal LMs.
+- `scripts/export_jlens_readouts.py` - optional wrapper that applies a fitted `jlens` lens and exports the Limes readout schema.
+- `examples/` - a starter audit spec and a synthetic readout artifact for smoke tests.
+- `tests/` - unit and CLI workflow coverage.
+- `docs/` - trainer workflow, artifact schema, non-claims, and roadmap.
+- `results/` - reserved for committed real result cards and machine-readable audit artifacts.
+- `UPSTREAMS.md` - source trail, license notes, and reuse boundary.
+
+## Quickstart
+
+Use Python 3.11 or newer.
+
+```bash
+python3 -m unittest discover -s tests
+./scripts/run_smoke.sh
+```
+
+Create and validate a new spec:
+
+```bash
+python3 -m limes_workspace_lens init-spec --out runs/my-audit-spec.json
+python3 -m limes_workspace_lens validate-spec runs/my-audit-spec.json
+python3 -m limes_workspace_lens export-prompts runs/my-audit-spec.json --out runs/prompts.jsonl
+```
+
+Score a readout artifact:
+
+```bash
+python3 -m limes_workspace_lens summarize-readouts examples/synthetic_readouts.json \
+  --spec examples/workspace_audit_spec.json \
+  --out runs/workspace-audit-card.md \
+  --json-out runs/workspace-audit-card.json
+```
+
+Compare two checkpoint reports:
+
+```bash
+python3 -m limes_workspace_lens compare-reports \
+  --before runs/base-report.json \
+  --after runs/posttrained-report.json \
+  --out runs/checkpoint-comparison.md \
+  --json-out runs/checkpoint-comparison.json
+```
+
+## Real Model Path
+
+Install Anthropic's reference implementation and ML dependencies in your own environment:
+
+```bash
+git clone https://github.com/anthropics/jacobian-lens.git external/jacobian-lens
+python3 -m pip install -e external/jacobian-lens
+python3 -m pip install torch transformers
+```
+
+Export prompts, fit a lens, and export readouts:
+
+```bash
+python3 -m limes_workspace_lens export-prompts examples/workspace_audit_spec.json --out runs/prompts.jsonl
+python3 scripts/fit_jlens.py \
+  --model Qwen/Qwen3-0.6B \
+  --prompts-jsonl runs/prompts.jsonl \
+  --out runs/qwen-small-lens.pt \
+  --max-prompts 100
+python3 scripts/export_jlens_readouts.py \
+  --model Qwen/Qwen3-0.6B \
+  --lens-repo runs \
+  --lens-file qwen-small-lens.pt \
+  --spec examples/workspace_audit_spec.json \
+  --out runs/qwen-small-readouts.json
+python3 -m limes_workspace_lens summarize-readouts runs/qwen-small-readouts.json \
+  --spec examples/workspace_audit_spec.json \
+  --out runs/qwen-small-audit-card.md \
+  --json-out runs/qwen-small-audit-card.json
+```
+
+Model IDs above are examples. Record the actual checkpoint, revision, tokenizer, quantization, lens prompt count, corpus, device, and random seed before publishing claims.
+
+## Intended Users
+
+- Model developers comparing base, SFT, LoRA, DPO, RL, or merge checkpoints.
+- Interpretability researchers who need a stable artifact contract around J-lens readouts.
+- Safety evaluators looking for an internal-readout layer to pair with output-only audits.
+- Limes Labs workstreams that need checkpoint regression cards for `limes-nanogpt`, EuroBench, or AutoResearch runs.
+
+## Non-Claims
+
+- This repo does not prove phenomenal consciousness or sentience.
+- J-lens readouts are not ground truth thoughts.
+- A hit on a token such as `fake` or `fraud` is a hypothesis-generation signal, not proof of deception.
+- Open-weight models must be audited independently; Anthropic's Claude findings do not automatically transfer.
+- Cross-model scores are not directly comparable unless lens fit, tokenizer, layers, positions, prompts, and controls are compatible.
+
+## Verification
+
+Before committing a serious artifact, run:
+
+```bash
+python3 -m unittest discover -s tests
+python3 -m py_compile limes_workspace_lens/*.py scripts/*.py
+./scripts/run_smoke.sh
+git diff --check
+```
+
+For real model runs, also preserve the fitted lens artifact, readout JSON, audit card, exact command log, model revision, lens revision, and compute manifest.
+
+## Sources
+
+This repository is inspired by Anthropic's "Verbalizable Representations Form a Global Workspace in Language Models", the Anthropic research summary, the Apache-2.0 `anthropics/jacobian-lens` reference implementation, and external commentary. See `UPSTREAMS.md` for the source trail and reuse boundary.
