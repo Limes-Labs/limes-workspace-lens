@@ -39,6 +39,7 @@ install_and_smoke() {
   "${venv_dir}/bin/limes-workspace-lens" validate-command-log --help >/dev/null
   "${venv_dir}/bin/limes-workspace-lens" validate-compute-manifest --help >/dev/null
   "${venv_dir}/bin/limes-workspace-lens" validate-lens-artifact --help >/dev/null
+  "${venv_dir}/bin/limes-workspace-lens" validate-gradient-attribution --help >/dev/null
   "${venv_dir}/bin/limes-workspace-lens" init-spec --out spec.json
   "${venv_dir}/bin/limes-workspace-lens" validate-spec spec.json
   "${venv_dir}/bin/limes-workspace-lens" export-prompts spec.json --out prompts.jsonl
@@ -126,6 +127,107 @@ PY
     --seed 7
   "${venv_dir}/bin/limes-workspace-lens" validate-behavior-eval behavior-eval.json --spec spec.json
   "${venv_dir}/bin/limes-workspace-lens" validate-control-eval control-eval.json --spec spec.json
+  "${venv_dir}/bin/python" - <<'PY'
+import hashlib
+import json
+import pathlib
+
+root = pathlib.Path(".")
+spec = json.loads((root / "spec.json").read_text(encoding="utf-8"))
+compatibility = json.loads((root / "behavior-eval.json").read_text(encoding="utf-8"))["compatibility"]
+readouts_sha256 = hashlib.sha256((root / "readouts.json").read_bytes()).hexdigest()
+rows = []
+for prompt in spec["prompts"]:
+    prompt_id = prompt["id"]
+    target_token = (prompt.get("expected_workspace_terms") or ["evidence"])[0]
+    rows.append(
+        {
+            "row_id": f"{prompt_id}:installed-gradient:layer-32",
+            "prompt_id": prompt_id,
+            "position": -1,
+            "layer": 32,
+            "target": {
+                "kind": "readout_token",
+                "token": target_token,
+                "rank": 1,
+                "score": 1.0,
+                "description": "Synthetic installed-package attribution target.",
+                "artifact_ref": "readouts",
+            },
+            "condition": {
+                "kind": "observed",
+                "control_id": None,
+                "alignment_policy": "same_prompt_position",
+            },
+            "attributions": [
+                {
+                    "rank": 1,
+                    "feature_type": "residual_stream",
+                    "feature_id": f"layer32/residual:{prompt_id}",
+                    "feature_position": -1,
+                    "feature_token_id": 0,
+                    "feature_text_sha256": hashlib.sha256(prompt_id.encode("utf-8")).hexdigest(),
+                    "signed_score": 1.0,
+                    "abs_score": 1.0,
+                    "normalized_abs": 1.0,
+                    "direction": "positive",
+                    "layer": 32,
+                    "token": target_token,
+                }
+            ],
+            "quality": {
+                "finite_values": True,
+                "target_found_in_readouts": True,
+                "autograd_enabled": True,
+                "nonzero_total_attribution": True,
+                "completeness_delta": 0.0,
+            },
+        }
+    )
+artifact = {
+    "schema_version": "limes-workspace-lens/gradient-attribution.v0.1",
+    "generated_utc": "2026-07-07T00:00:00Z",
+    "source": "installed-package-gradient-attribution-smoke",
+    "synthetic": True,
+    "model": {
+        "id": spec["model"]["name"],
+        "checkpoint": spec["model"]["checkpoint"],
+    },
+    "compatibility": compatibility,
+    "attribution_compatibility": {
+        "operator": "gradient_x_activation",
+        "target_policy": "selected_readout_token",
+        "feature_types": ["residual_stream"],
+        "attribution_top_k": 1,
+        "rank_by": "abs_score",
+        "normalization": "l1_abs",
+        "baseline_policy": "not_applicable",
+        "hook_policy": "residual_stream_pre_layer_norm",
+        "autograd_backend": "synthetic-fixture",
+        "dtype": "float32",
+    },
+    "generation": {
+        "mode": "synthetic_installed_package_fixture",
+        "command": "scripts/check_install.sh",
+        "dependency_profile": "stdlib-only-no-model-execution",
+        "seed": 7,
+        "config": {"fixture": True},
+    },
+    "input_artifacts": [
+        {
+            "kind": "readouts",
+            "path": "readouts.json",
+            "sha256": readouts_sha256,
+        }
+    ],
+    "rows": rows,
+}
+(root / "gradient-attribution.json").write_text(
+    json.dumps(artifact, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+  "${venv_dir}/bin/limes-workspace-lens" validate-gradient-attribution gradient-attribution.json --spec spec.json
   "${venv_dir}/bin/limes-workspace-lens" build-reflection-data spec.json --out reflection.jsonl
   "${venv_dir}/bin/limes-workspace-lens" make-intervention-plan spec.json --out intervention-plan.json
   "${venv_dir}/bin/limes-workspace-lens" build-manifest \
@@ -134,6 +236,7 @@ PY
     audit-card.json \
     behavior-eval.json \
     control-eval.json \
+    gradient-attribution.json \
     reflection.jsonl \
     intervention-plan.json \
     --root . \
@@ -153,6 +256,7 @@ for name in [
     "audit-card.json",
     "behavior-eval.json",
     "control-eval.json",
+    "gradient-attribution.json",
     "intervention-plan.json",
     "artifact-manifest.json",
 ]:

@@ -94,6 +94,7 @@ Do not put J-lens readout scores directly into a production reward or loss until
 
 - snapshot checkpoints periodically;
 - generate audit cards;
+- attach gradient-attribution artifacts from real autograd runs when they explain which internal features drove a readout target;
 - route suspicious deltas to human review;
 - use counterfactual-reflection data as a separate experimental dataset;
 - test whether reflection data changes readouts and behavior in the intended direction.

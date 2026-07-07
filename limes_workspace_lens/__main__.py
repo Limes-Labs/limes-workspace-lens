@@ -26,6 +26,7 @@ from .schema import (
     validate_command_log,
     validate_compute_manifest,
     validate_control_eval,
+    validate_gradient_attribution,
     validate_lens_artifact,
     validate_audit_spec,
     validate_readouts,
@@ -62,6 +63,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     validate_control.add_argument("control_eval")
     validate_control.add_argument("--spec")
+
+    validate_gradient = subparsers.add_parser(
+        "validate-gradient-attribution", help="Validate a gradient-attribution artifact."
+    )
+    validate_gradient.add_argument("gradient_attribution")
+    validate_gradient.add_argument("--spec")
 
     validate_command_log_parser = subparsers.add_parser(
         "validate-command-log", help="Validate a command-log artifact."
@@ -208,6 +215,14 @@ def main(argv: list[str] | None = None) -> int:
             artifact = load_json(args.control_eval)
             ensure_valid(validate_control_eval(artifact, spec))
             print(f"valid: {args.control_eval}")
+            return 0
+        if args.command == "validate-gradient-attribution":
+            spec = load_json(args.spec) if args.spec else None
+            if spec is not None:
+                ensure_valid(validate_audit_spec(spec))
+            artifact = load_json(args.gradient_attribution)
+            ensure_valid(validate_gradient_attribution(artifact, spec))
+            print(f"valid: {args.gradient_attribution}")
             return 0
         if args.command == "validate-command-log":
             artifact = load_json(args.command_log)

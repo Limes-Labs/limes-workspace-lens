@@ -105,6 +105,109 @@ python3 -m limes_workspace_lens validate-behavior-eval "${TMP_DIR}/behavior-eval
   --spec "${TMP_DIR}/workspace_audit_spec.json"
 python3 -m limes_workspace_lens validate-control-eval "${TMP_DIR}/control-eval.json" \
   --spec "${TMP_DIR}/workspace_audit_spec.json"
+python3 - "${TMP_DIR}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+spec = json.loads((root / "workspace_audit_spec.json").read_text(encoding="utf-8"))
+compatibility = json.loads((root / "behavior-eval.json").read_text(encoding="utf-8"))["compatibility"]
+readouts_sha256 = hashlib.sha256((root / "synthetic_readouts.json").read_bytes()).hexdigest()
+rows = []
+for prompt in spec["prompts"]:
+    prompt_id = prompt["id"]
+    target_token = (prompt.get("expected_workspace_terms") or ["evidence"])[0]
+    rows.append(
+        {
+            "row_id": f"{prompt_id}:synthetic-gradient:layer-32",
+            "prompt_id": prompt_id,
+            "position": -1,
+            "layer": 32,
+            "target": {
+                "kind": "readout_token",
+                "token": target_token,
+                "rank": 1,
+                "score": 1.0,
+                "description": "Synthetic smoke attribution target.",
+                "artifact_ref": "readouts",
+            },
+            "condition": {
+                "kind": "observed",
+                "control_id": None,
+                "alignment_policy": "same_prompt_position",
+            },
+            "attributions": [
+                {
+                    "rank": 1,
+                    "feature_type": "residual_stream",
+                    "feature_id": f"layer32/residual:{prompt_id}",
+                    "feature_position": -1,
+                    "feature_token_id": 0,
+                    "feature_text_sha256": hashlib.sha256(prompt_id.encode("utf-8")).hexdigest(),
+                    "signed_score": 1.0,
+                    "abs_score": 1.0,
+                    "normalized_abs": 1.0,
+                    "direction": "positive",
+                    "layer": 32,
+                    "token": target_token,
+                }
+            ],
+            "quality": {
+                "finite_values": True,
+                "target_found_in_readouts": True,
+                "autograd_enabled": True,
+                "nonzero_total_attribution": True,
+                "completeness_delta": 0.0,
+            },
+        }
+    )
+artifact = {
+    "schema_version": "limes-workspace-lens/gradient-attribution.v0.1",
+    "generated_utc": "2026-07-07T00:00:00Z",
+    "source": "synthetic-smoke-gradient-attribution",
+    "synthetic": True,
+    "model": {
+        "id": spec["model"]["name"],
+        "checkpoint": spec["model"]["checkpoint"],
+    },
+    "compatibility": compatibility,
+    "attribution_compatibility": {
+        "operator": "gradient_x_activation",
+        "target_policy": "selected_readout_token",
+        "feature_types": ["residual_stream"],
+        "attribution_top_k": 1,
+        "rank_by": "abs_score",
+        "normalization": "l1_abs",
+        "baseline_policy": "not_applicable",
+        "hook_policy": "residual_stream_pre_layer_norm",
+        "autograd_backend": "synthetic-fixture",
+        "dtype": "float32",
+    },
+    "generation": {
+        "mode": "synthetic_smoke_fixture",
+        "command": "./scripts/run_smoke.sh",
+        "dependency_profile": "stdlib-only-no-model-execution",
+        "seed": 7,
+        "config": {"fixture": True},
+    },
+    "input_artifacts": [
+        {
+            "kind": "readouts",
+            "path": "synthetic_readouts.json",
+            "sha256": readouts_sha256,
+        }
+    ],
+    "rows": rows,
+}
+(root / "gradient-attribution.json").write_text(
+    json.dumps(artifact, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+python3 -m limes_workspace_lens validate-gradient-attribution "${TMP_DIR}/gradient-attribution.json" \
+  --spec "${TMP_DIR}/workspace_audit_spec.json"
 python3 -m limes_workspace_lens build-reflection-data examples/workspace_audit_spec.json --out "${TMP_DIR}/reflection.jsonl"
 python3 -m limes_workspace_lens make-intervention-plan examples/workspace_audit_spec.json --out "${TMP_DIR}/intervention-plan.json"
 python3 -m limes_workspace_lens compare-reports \
@@ -182,6 +285,7 @@ python3 -m limes_workspace_lens build-manifest \
   "${TMP_DIR}/audit-card.json" \
   "${TMP_DIR}/behavior-eval.json" \
   "${TMP_DIR}/control-eval.json" \
+  "${TMP_DIR}/gradient-attribution.json" \
   "${TMP_DIR}/command-log.json" \
   "${TMP_DIR}/compute-manifest.json" \
   "${TMP_DIR}/lens-identity.json" \
@@ -250,6 +354,13 @@ bundle = {
             "schema_version": "limes-workspace-lens/control-eval.v0.1",
             "required_for_status": False,
         },
+        {
+            "id": "gradient",
+            "kind": "gradient_attribution",
+            "path": "gradient-attribution.json",
+            "schema_version": "limes-workspace-lens/gradient-attribution.v0.1",
+            "required_for_status": False,
+        },
     ],
     "pairings": [
         {
@@ -257,6 +368,7 @@ bundle = {
             "readout_artifact_id": "readouts",
             "behavior_artifact_id": "behavior",
             "control_artifact_ids": ["control"],
+            "gradient_attribution_artifact_ids": ["gradient"],
             "relation": "diagnostic_readout_only",
             "notes": "Smoke fixture pairs saved outputs and controls but still uses synthetic readouts.",
         }
@@ -304,6 +416,7 @@ for name in [
     "audit-card.json",
     "behavior-eval.json",
     "control-eval.json",
+    "gradient-attribution.json",
     "intervention-plan.json",
     "comparison.json",
     "artifact-manifest.json",
