@@ -21,8 +21,9 @@ The system is complete only when a user can:
 
 The v0.1 repository now has:
 
-- dependency-free spec, readout, report, manifest, comparison, evidence-bundle, reflection-data, and intervention-plan validation;
+- dependency-free spec, readout, behavior-eval, control-eval, report, manifest, comparison, evidence-bundle, reflection-data, and intervention-plan validation;
 - audit-card generation from readout JSON;
+- behavior/control artifact generation from saved model-output JSONL;
 - checkpoint report comparison with compatibility gates;
 - artifact manifests with SHA256 validation;
 - evidence-bundle validation for `diagnostic`, `mixed`, `negative`, and `verified` status rules;
@@ -33,7 +34,7 @@ The v0.1 repository now has:
 - README, non-claims, trainer workflow, and roadmap docs;
 - CI and integrated smoke tests.
 
-This is now a useful artifact-contract and audit-card workbench, but it is not yet a complete production-quality Jacobian-lens audit tool because it still lacks runnable behavior/control generation, real open-weight evidence, and executable interventions.
+This is now a useful artifact-contract and audit-card workbench, but it is not yet a complete production-quality Jacobian-lens audit tool because it still lacks real open-weight evidence, executable interventions, tokenizer-aware diagnostics, and install/security hardening.
 
 ## Live Todo
 
@@ -46,10 +47,11 @@ This is now a useful artifact-contract and audit-card workbench, but it is not y
 - [x] Evidence-bundle validator with status gates and strict artifact checks.
 - [x] Real-model adapter hardening for optional dependency errors, pinned revisions, local replay flags, device preflight, and provenance.
 - [x] Integrated smoke path covering manifests, comparison, evidence bundle validation, and adapter help commands.
+- [x] Runnable `behavior-eval.v0.1` and `control-eval.v0.1` artifact generators from saved output JSONL.
+- [x] Strict behavior/control validators with prompt coverage, compatibility checks, and evidence-bundle integration.
 
 ### Remaining
 
-- [ ] Runnable `behavior-eval.v0.1` and `control-eval.v0.1` artifact generators.
 - [ ] One real open-weight replication pack with `synthetic=false` readouts, behavior artifacts, controls, manifests, command logs, compute manifest, and evidence bundle.
 - [ ] Executable intervention runtime for hookable toy modules before model-scale intervention claims.
 - [ ] Tokenizer-aware term mapping and lens-fit diagnostics.
@@ -61,20 +63,7 @@ This is now a useful artifact-contract and audit-card workbench, but it is not y
 
 ## Missing Production Components
 
-### 1. Runnable Behavior And Control Artifacts
-
-Required:
-
-- `run-behavior-eval` command that turns a locked audit spec into a behavior artifact.
-- `run-control-eval` command for random-direction, neutral-token, no-op, or prompt-variant controls.
-- Prompt coverage checks for every prompt in the claimed bundle.
-- Generation config, seed, model identity, metric definitions, and command log fields.
-
-Why it matters:
-
-Evidence bundles currently validate behavior/control artifacts when present, but the repo does not yet help users create those artifacts.
-
-### 2. Open-Weight Replication Pack
+### 1. Open-Weight Replication Pack
 
 Required:
 
@@ -89,7 +78,7 @@ Why it matters:
 
 The repo should not claim real utility until it demonstrates at least one real open-weight audit from model internals.
 
-### 3. Control And Intervention Execution
+### 2. Control And Intervention Execution
 
 Required:
 
@@ -103,7 +92,7 @@ Why it matters:
 
 The strongest evidence in the source literature is causal. The repo should eventually support causal tests, not only readout inspection.
 
-### 4. Tokenizer-Aware Term Mapping And Lens-Fit Diagnostics
+### 3. Tokenizer-Aware Term Mapping And Lens-Fit Diagnostics
 
 Required:
 
@@ -116,7 +105,7 @@ Why it matters:
 
 Exact decoded-token string matching is useful for fixtures, but too brittle for serious tokenizer-dependent claims.
 
-### 5. Packaging, Security, And Reproducibility Hardening
+### 4. Packaging, Security, And Reproducibility Hardening
 
 Required:
 
@@ -130,7 +119,7 @@ Why it matters:
 
 Model-development teams need the tool to install cleanly, avoid accidental data leaks, and preserve replayable artifacts.
 
-### 6. Visualization
+### 5. Visualization
 
 Required:
 
@@ -143,7 +132,7 @@ Why it matters:
 
 Human review needs more than aggregate counts. Researchers need to inspect where terms appear and disappear.
 
-### 7. AutoResearch And Limes Integration
+### 6. AutoResearch And Limes Integration
 
 Required:
 
@@ -263,6 +252,8 @@ Acceptance:
 
 - Every prompt in a spec receives behavior/control rows.
 - Verified bundles fail when rows are missing.
+
+Status: merged in this slice.
 
 ### PR 9: Open-Weight Replication Pack
 

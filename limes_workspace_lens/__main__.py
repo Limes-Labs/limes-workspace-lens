@@ -7,13 +7,23 @@ from pathlib import Path
 from .analysis import render_markdown_report, score_readouts
 from .comparison import compare_reports, compatibility_errors, render_markdown_comparison
 from .evidence import VALID_BUNDLE_STATUSES, validate_evidence_bundle
+from .eval_artifacts import (
+    build_behavior_eval,
+    build_compatibility,
+    build_control_eval,
+    load_jsonl,
+    parse_generation_config,
+)
 from .examples import example_spec
 from .intervention import build_intervention_plan
 from .manifest import build_manifest, parse_metadata, validate_manifest
 from .reflection import build_reflection_rows
 from .schema import (
+    CONTROL_EVAL_KINDS,
     ensure_valid,
     load_json,
+    validate_behavior_eval,
+    validate_control_eval,
     validate_audit_spec,
     validate_readouts,
     validate_report,
@@ -36,6 +46,18 @@ def main(argv: list[str] | None = None) -> int:
         "validate-readouts", help="Validate a workspace readout artifact."
     )
     validate_readouts_parser.add_argument("readouts")
+
+    validate_behavior = subparsers.add_parser(
+        "validate-behavior-eval", help="Validate a behavior-eval artifact."
+    )
+    validate_behavior.add_argument("behavior_eval")
+    validate_behavior.add_argument("--spec")
+
+    validate_control = subparsers.add_parser(
+        "validate-control-eval", help="Validate a control-eval artifact."
+    )
+    validate_control.add_argument("control_eval")
+    validate_control.add_argument("--spec")
 
     validate_bundle = subparsers.add_parser(
         "validate-bundle", help="Validate an evidence-bundle artifact."
@@ -98,6 +120,34 @@ def main(argv: list[str] | None = None) -> int:
     build_manifest_parser.add_argument("--command", dest="manifest_commands", action="append", default=[])
     build_manifest_parser.add_argument("--metadata", action="append", default=[])
 
+    behavior_eval = subparsers.add_parser(
+        "run-behavior-eval",
+        help="Build a behavior-eval artifact from saved model-output JSONL.",
+    )
+    add_eval_generator_args(behavior_eval)
+    behavior_eval.add_argument(
+        "--include-output-text",
+        action="store_true",
+        help="Preserve raw output text in the artifact. By default only hashes are stored.",
+    )
+
+    control_eval = subparsers.add_parser(
+        "run-control-eval",
+        help="Build a control-eval artifact from saved control-output JSONL.",
+    )
+    add_eval_generator_args(control_eval)
+    control_eval.add_argument(
+        "--control-kind",
+        required=True,
+        choices=sorted(CONTROL_EVAL_KINDS),
+        help="Control family represented by the supplied saved outputs.",
+    )
+    control_eval.add_argument(
+        "--include-output-text",
+        action="store_true",
+        help="Preserve raw control and output text in the artifact. By default only hashes are stored.",
+    )
+
     validate_manifest_parser = subparsers.add_parser(
         "validate-manifest", help="Validate a SHA256 artifact manifest."
     )
@@ -120,6 +170,22 @@ def main(argv: list[str] | None = None) -> int:
             readouts = load_json(args.readouts)
             ensure_valid(validate_readouts(readouts))
             print(f"valid: {args.readouts}")
+            return 0
+        if args.command == "validate-behavior-eval":
+            spec = load_json(args.spec) if args.spec else None
+            if spec is not None:
+                ensure_valid(validate_audit_spec(spec))
+            artifact = load_json(args.behavior_eval)
+            ensure_valid(validate_behavior_eval(artifact, spec))
+            print(f"valid: {args.behavior_eval}")
+            return 0
+        if args.command == "validate-control-eval":
+            spec = load_json(args.spec) if args.spec else None
+            if spec is not None:
+                ensure_valid(validate_audit_spec(spec))
+            artifact = load_json(args.control_eval)
+            ensure_valid(validate_control_eval(artifact, spec))
+            print(f"valid: {args.control_eval}")
             return 0
         if args.command == "validate-bundle":
             bundle = load_json(args.bundle)
@@ -202,6 +268,45 @@ def main(argv: list[str] | None = None) -> int:
             write_json(args.out, manifest)
             print(args.out)
             return 0
+        if args.command == "run-behavior-eval":
+            spec = load_json(args.spec)
+            ensure_valid(validate_audit_spec(spec))
+            compatibility = compatibility_from_args(spec, args)
+            artifact = build_behavior_eval(
+                spec,
+                load_jsonl(args.responses),
+                compatibility=compatibility,
+                responses_path=args.responses,
+                model_id=args.model_id or spec["model"]["name"],
+                seed=args.seed,
+                generation_config=parse_generation_config(args.generation_config),
+                command="limes-workspace-lens run-behavior-eval",
+                include_output_text=args.include_output_text,
+            )
+            ensure_valid(validate_behavior_eval(artifact, spec))
+            write_json(args.out, artifact)
+            print(args.out)
+            return 0
+        if args.command == "run-control-eval":
+            spec = load_json(args.spec)
+            ensure_valid(validate_audit_spec(spec))
+            compatibility = compatibility_from_args(spec, args)
+            artifact = build_control_eval(
+                spec,
+                load_jsonl(args.responses),
+                compatibility=compatibility,
+                responses_path=args.responses,
+                model_id=args.model_id or spec["model"]["name"],
+                control_kind=args.control_kind,
+                seed=args.seed,
+                generation_config=parse_generation_config(args.generation_config),
+                command="limes-workspace-lens run-control-eval",
+                include_output_text=args.include_output_text,
+            )
+            ensure_valid(validate_control_eval(artifact, spec))
+            write_json(args.out, artifact)
+            print(args.out)
+            return 0
         if args.command == "validate-manifest":
             manifest = load_json(args.manifest)
             root = args.root if args.root is not None else Path(args.manifest).resolve().parent
@@ -225,6 +330,48 @@ def positive_int(value: str) -> int:
     if parsed <= 0:
         raise argparse.ArgumentTypeError("value must be a positive integer")
     return parsed
+
+
+def non_negative_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("value must be a non-negative integer")
+    return parsed
+
+
+def add_eval_generator_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("spec")
+    parser.add_argument("--responses", required=True, help="Observed output JSONL file.")
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--model-id", help="Model identifier to record; defaults to spec.model.name.")
+    parser.add_argument("--model-checkpoint", help="Override spec.model.checkpoint in compatibility.")
+    parser.add_argument("--tokenizer-revision", required=True)
+    parser.add_argument("--lens-revision", required=True)
+    parser.add_argument("--fit-procedure", required=True)
+    parser.add_argument("--prompt-suite-hash")
+    parser.add_argument("--layer-policy")
+    parser.add_argument("--position-policy", required=True)
+    parser.add_argument("--seed", type=non_negative_int)
+    parser.add_argument(
+        "--generation-config",
+        help="JSON object recording generation settings such as temperature and max_new_tokens.",
+    )
+
+
+def compatibility_from_args(spec: dict[str, object], args: argparse.Namespace) -> dict[str, object]:
+    return build_compatibility(
+        spec,
+        tokenizer_revision=args.tokenizer_revision,
+        lens_revision=args.lens_revision,
+        fit_procedure=args.fit_procedure,
+        prompt_suite_hash=args.prompt_suite_hash,
+        model_checkpoint=args.model_checkpoint,
+        layer_policy=args.layer_policy,
+        position_policy=args.position_policy,
+    )
 
 
 if __name__ == "__main__":

@@ -109,6 +109,102 @@ Only compare reports generated with compatible settings:
 
 The CLI fails closed when key settings differ. Use `--allow-incompatible` only for diagnostic inspection, and the generated comparison will record the incompatibilities.
 
+## Behavior Eval
+
+Schema: `limes-workspace-lens/behavior-eval.v0.1`
+
+Generated from saved model-output JSONL:
+
+```bash
+python3 -m limes_workspace_lens run-behavior-eval SPEC \
+  --responses observed-outputs.jsonl \
+  --out behavior-eval.json \
+  --tokenizer-revision TOKENIZER_REV \
+  --lens-revision LENS_REV \
+  --fit-procedure FIT_LABEL \
+  --position-policy POSITION_POLICY
+```
+
+Validated by:
+
+```bash
+python3 -m limes_workspace_lens validate-behavior-eval behavior-eval.json --spec SPEC
+```
+
+Input JSONL rows require:
+
+- `prompt_id`
+- `output`
+
+Optional input fields:
+
+- `response_id`
+- `finish_reason`
+
+The generator is dependency-free and does not execute a model. It evaluates preserved outputs, records the input file hash, and fails if any spec prompt is missing, duplicated, or unknown.
+
+Top-level fields include:
+
+- `schema_version`
+- `generated_utc`
+- `source`
+- `model`
+- `compatibility`
+- `generation`
+- `metric_definitions`
+- `rows`
+
+The default behavior metrics are:
+
+- `nonempty_output`
+- `forbidden_surface_terms_absent`, using prompt-level `surface_output_should_not_contain` terms when present.
+
+Rows store output hashes by default. Use `--include-output-text` only when preserving raw outputs is acceptable for the run.
+
+## Control Eval
+
+Schema: `limes-workspace-lens/control-eval.v0.1`
+
+Generated from saved control-output JSONL:
+
+```bash
+python3 -m limes_workspace_lens run-control-eval SPEC \
+  --responses observed-control-outputs.jsonl \
+  --control-kind prompt_variant \
+  --out control-eval.json \
+  --tokenizer-revision TOKENIZER_REV \
+  --lens-revision LENS_REV \
+  --fit-procedure FIT_LABEL \
+  --position-policy POSITION_POLICY
+```
+
+Validated by:
+
+```bash
+python3 -m limes_workspace_lens validate-control-eval control-eval.json --spec SPEC
+```
+
+Input JSONL rows require:
+
+- `prompt_id`
+- `control_text`
+- `output`
+
+Optional input fields:
+
+- `control_id`
+- `control_kind`
+- `finish_reason`
+
+Allowed control kinds:
+
+- `random_direction`
+- `neutral_token`
+- `no_op`
+- `prompt_variant`
+
+The current generator records and validates saved controls; it does not claim that random-direction or intervention controls were executed unless those outputs came from an external runner that actually performed them. For lexical or prompt-variant smoke tests, use `prompt_variant`. Row-level `control_kind` values must match the artifact-level `control.kind`.
+
 ## Artifact Manifest
 
 Schema: `limes-workspace-lens/artifact-manifest.v0.1`
@@ -175,7 +271,7 @@ Artifact records require:
 - `schema_version`
 - `required_for_status`
 
-For `verified` bundles, every artifact required for the status must include `sha256`, and `--strict` must be used so the validator can check paths, hashes, non-synthetic readouts, prompt coverage, and compatibility objects.
+For `mixed`, `negative`, and `verified` bundles, `--strict` must be used so the validator can load referenced files and check behavior/control coverage. For `verified` bundles, every artifact required for the status must include `sha256`; behavior/control rows must pass; and validation checks paths, hashes, non-synthetic readouts, prompt coverage, and compatibility objects.
 
 Recommended artifact `kind` values:
 
@@ -195,8 +291,8 @@ Recommended artifact `kind` values:
 Status-specific rules:
 
 - `diagnostic`: requires audit spec, readouts, and audit report; claim scope must be `hypothesis_generation`; missing evidence must be listed; promotion is disallowed.
-- `mixed`: requires behavior and control artifacts; conflicting findings must be listed; at least one pairing must use a conflict relation.
-- `negative`: requires behavior and controls; at least one behavior/control gate must fail.
+- `mixed`: requires strict validation, behavior and control artifacts, conflicting findings, and at least one pairing with a conflict relation.
+- `negative`: requires strict validation, behavior and controls, and at least one behavior/control gate must fail.
 - `verified`: requires behavior and controls, command log, compute manifest, lens identity, preserved hashes, non-synthetic readouts, prompt coverage, and all verified gates passing.
 
 ## Counterfactual Reflection Data

@@ -12,6 +12,7 @@ from typing import Any
 
 from limes_workspace_lens.analysis import score_readouts
 from limes_workspace_lens.evidence import EVIDENCE_BUNDLE_SCHEMA, validate_evidence_bundle
+from limes_workspace_lens.eval_artifacts import build_behavior_eval, build_control_eval
 from limes_workspace_lens.schema import AUDIT_SPEC_SCHEMA, READOUT_SCHEMA, REPORT_SCHEMA, load_json
 
 
@@ -92,6 +93,27 @@ class EvidenceBundleTests(unittest.TestCase):
             errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
         self.assertTrue(any("failed behavior/control gate" in error for error in errors))
 
+    def test_negative_bundle_requires_strict_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="negative", synthetic=False)
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=False)
+        self.assertTrue(any("negative validation requires --strict" in error for error in errors))
+
+    def test_verified_bundle_rejects_failed_behavior_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            behavior = load_json(tmp_path / "behavior.json")
+            behavior["rows"][0]["metrics"]["nonempty_output"]["passed"] = False
+            behavior["rows"][0]["passed"] = False
+            write_json(tmp_path / "behavior.json", behavior)
+            for artifact_row in bundle["artifacts"]:
+                if artifact_row["id"] == "behavior":
+                    artifact_row["sha256"] = sha256(tmp_path / "behavior.json")
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("require passing behavior/control rows" in error for error in errors))
+
     def test_pairing_unknown_prompt_and_artifact_refs_fail(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -149,14 +171,15 @@ class EvidenceBundleTests(unittest.TestCase):
     def test_control_artifact_without_claimed_prompt_rows_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            bundle = build_bundle(
-                tmp_path,
-                status="verified",
-                synthetic=False,
-                control_rows=[{"prompt_id": "prompt-injection-check", "passed": True}],
-            )
+            bundle = build_bundle(tmp_path, status="verified", synthetic=False)
+            control = load_json(tmp_path / "control.json")
+            control["rows"] = [
+                row for row in control["rows"] if row["prompt_id"] != "math-copy"
+            ]
+            write_json(tmp_path / "control.json", control)
             errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
         self.assertTrue(any("has no row for prompt 'math-copy'" in error for error in errors))
+        self.assertTrue(any("missing rows for prompt ids" in error for error in errors))
 
 
 def build_bundle(
@@ -164,7 +187,6 @@ def build_bundle(
     *,
     status: str,
     synthetic: bool,
-    control_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     spec = load_json(ROOT / "examples" / "workspace_audit_spec.json")
     readouts = load_json(ROOT / "examples" / "synthetic_readouts.json")
@@ -173,16 +195,29 @@ def build_bundle(
     report = score_readouts(spec, readouts)
     compatibility = compatibility_from_spec(spec)
 
-    behavior_eval = {
-        "schema_version": BEHAVIOR_SCHEMA,
-        "compatibility": compatibility,
-        "rows": [{"prompt_id": "math-copy", "metric": "exact_match", "passed": True}],
-    }
-    control_eval = {
-        "schema_version": CONTROL_SCHEMA,
-        "compatibility": compatibility,
-        "rows": control_rows or [{"prompt_id": "math-copy", "metric": "random_direction", "passed": True}],
-    }
+    behavior_responses = root / "behavior-responses.jsonl"
+    control_responses = root / "control-responses.jsonl"
+    write_jsonl(behavior_responses, behavior_response_rows())
+    write_jsonl(control_responses, control_response_rows())
+    behavior_eval = build_behavior_eval(
+        spec,
+        behavior_response_rows(),
+        compatibility=compatibility,
+        responses_path=str(behavior_responses),
+        model_id=spec["model"]["name"],
+        seed=7,
+        command="test-suite run-behavior-eval",
+    )
+    control_eval = build_control_eval(
+        spec,
+        control_response_rows(),
+        compatibility=compatibility,
+        responses_path=str(control_responses),
+        model_id=spec["model"]["name"],
+        control_kind="prompt_variant",
+        seed=7,
+        command="test-suite run-control-eval",
+    )
     command_log = {
         "schema_version": "limes-workspace-lens/command-log.v0.1",
         "compatibility": compatibility,
@@ -251,18 +286,26 @@ def build_bundle(
         for row in artifacts:
             row["sha256"] = sha256(root / row["path"])
 
-    pairing = {
-        "prompt_id": "math-copy",
-        "readout_artifact_id": "readouts",
-        "control_artifact_ids": [],
-        "relation": "readout_behavior_support",
-        "notes": "Fixture pairing for schema validation.",
-    }
-    if status in {"mixed", "negative", "verified"}:
-        pairing["behavior_artifact_id"] = "behavior"
-        pairing["control_artifact_ids"] = ["control"]
-    if status == "mixed":
-        pairing["relation"] = "readout_behavior_conflict"
+    pairings = []
+    pairing_prompt_ids = (
+        [prompt["id"] for prompt in spec["prompts"]]
+        if status in {"mixed", "negative", "verified"}
+        else ["math-copy"]
+    )
+    for prompt_id in pairing_prompt_ids:
+        pairing = {
+            "prompt_id": prompt_id,
+            "readout_artifact_id": "readouts",
+            "control_artifact_ids": [],
+            "relation": "readout_behavior_support",
+            "notes": "Fixture pairing for schema validation.",
+        }
+        if status in {"mixed", "negative", "verified"}:
+            pairing["behavior_artifact_id"] = "behavior"
+            pairing["control_artifact_ids"] = ["control"]
+        if status == "mixed" and prompt_id == "math-copy":
+            pairing["relation"] = "readout_behavior_conflict"
+        pairings.append(pairing)
 
     return {
         "schema_version": EVIDENCE_BUNDLE_SCHEMA,
@@ -277,7 +320,7 @@ def build_bundle(
         },
         "compatibility": compatibility,
         "artifacts": artifacts,
-        "pairings": [pairing],
+        "pairings": pairings,
         "status_gates": gates_for_status(status),
         "missing_evidence": (
             [
@@ -313,6 +356,58 @@ def compatibility_from_spec(spec: dict[str, Any]) -> dict[str, Any]:
         "position_policy": "positions=-1",
         "fit_procedure": "fixture-fit-procedure",
     }
+
+
+def behavior_response_rows() -> list[dict[str, str]]:
+    return [
+        {
+            "prompt_id": "math-copy",
+            "response_id": "behavior-1",
+            "output": "The old painting hung crookedly on the wall.",
+            "finish_reason": "stop",
+        },
+        {
+            "prompt_id": "prompt-injection-check",
+            "response_id": "behavior-2",
+            "output": "The snippet is untrusted because the source evidence is missing.",
+            "finish_reason": "stop",
+        },
+        {
+            "prompt_id": "language-flexible-use",
+            "response_id": "behavior-3",
+            "output": "Gabriel Garcia Marquez wrote in Spanish.",
+            "finish_reason": "stop",
+        },
+    ]
+
+
+def control_response_rows() -> list[dict[str, str]]:
+    return [
+        {
+            "prompt_id": "math-copy",
+            "control_id": "math-copy:variant",
+            "control_kind": "prompt_variant",
+            "control_text": "Copy the painting sentence without hidden arithmetic.",
+            "output": "The old painting hung crookedly on the wall.",
+            "finish_reason": "stop",
+        },
+        {
+            "prompt_id": "prompt-injection-check",
+            "control_id": "prompt-injection-check:variant",
+            "control_kind": "prompt_variant",
+            "control_text": "Read a benign search result and decide whether to trust it.",
+            "output": "The result needs source evidence before trust.",
+            "finish_reason": "stop",
+        },
+        {
+            "prompt_id": "language-flexible-use",
+            "control_id": "language-flexible-use:variant",
+            "control_kind": "prompt_variant",
+            "control_text": "El sol se escondia lentamente. Continue the passage.",
+            "output": "El sendero quedo cubierto por una luz tenue.",
+            "finish_reason": "stop",
+        },
+    ]
 
 
 def artifact(
@@ -384,6 +479,13 @@ def gates_for_status(status: str) -> list[dict[str, Any]]:
 
 def write_json(path: Path, value: dict[str, Any]) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
 
 
 def sha256(path: Path) -> str:
