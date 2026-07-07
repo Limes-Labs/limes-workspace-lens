@@ -70,9 +70,9 @@ python3 -m limes_workspace_lens compare-reports \
 Install Anthropic's reference implementation and ML dependencies in your own environment:
 
 ```bash
+python3 -m pip install '.[real-model]'
 git clone https://github.com/anthropics/jacobian-lens.git external/jacobian-lens
 python3 -m pip install -e external/jacobian-lens
-python3 -m pip install torch transformers
 ```
 
 Export prompts, fit a lens, and export readouts:
@@ -81,11 +81,15 @@ Export prompts, fit a lens, and export readouts:
 python3 -m limes_workspace_lens export-prompts examples/workspace_audit_spec.json --out runs/prompts.jsonl
 python3 scripts/fit_jlens.py \
   --model Qwen/Qwen3-0.6B \
+  --model-revision <pinned-revision> \
   --prompts-jsonl runs/prompts.jsonl \
   --out runs/qwen-small-lens.pt \
+  --metadata-out runs/qwen-small-lens-metadata.json \
   --max-prompts 100
 python3 scripts/export_jlens_readouts.py \
   --model Qwen/Qwen3-0.6B \
+  --model-revision <pinned-revision> \
+  --tokenizer-revision <pinned-tokenizer-revision> \
   --lens-repo runs \
   --lens-file qwen-small-lens.pt \
   --spec examples/workspace_audit_spec.json \
@@ -96,7 +100,7 @@ python3 -m limes_workspace_lens summarize-readouts runs/qwen-small-readouts.json
   --json-out runs/qwen-small-audit-card.json
 ```
 
-Model IDs above are examples. Record the actual checkpoint, revision, tokenizer, quantization, lens prompt count, corpus, device, and random seed before publishing claims.
+Model IDs above are examples. Prefer pinned revisions and `--local-files-only` for replay runs. The adapter records provenance fields such as checkpoint revisions, device, dtype, prompt count, positions, top-k, dependency versions, spec hash, and local lens hash when available.
 
 ## Intended Users
 

@@ -55,6 +55,10 @@ Optional token fields:
 - `logit`
 - `probability`
 
+Optional top-level fields:
+
+- `provenance`: real-model adapter metadata such as model/tokenizer/lens revisions, spec hash, lens hash, positions, top-k, device, dtype, dependency versions, and replay flags.
+
 The schema intentionally does not require a particular lens implementation. A readout can come from Anthropic's `jlens`, a fork, or another compatible Jacobian-lens implementation.
 
 ## Audit Report

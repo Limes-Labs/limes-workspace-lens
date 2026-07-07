@@ -15,6 +15,12 @@ authors = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+real-model = [
+  "torch",
+  "transformers>=4.40",
+]
+
 [project.scripts]
 limes-workspace-lens = "limes_workspace_lens.__main__:main"
 

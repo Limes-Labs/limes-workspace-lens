@@ -8,8 +8,22 @@ not vendor or reimplement Anthropic's reference fitter.
 from __future__ import annotations
 
 import argparse
-import json
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from limes_workspace_lens.jlens_adapter import (
+    AdapterError,
+    build_provenance,
+    choose_device,
+    load_optional_deps,
+    load_prompt_texts,
+    parse_torch_dtype,
+    pretrained_kwargs,
+    set_seed,
+    write_json,
+)
 
 
 def main() -> int:
@@ -20,49 +34,79 @@ def main() -> int:
     parser.add_argument("--checkpoint-path", default=None)
     parser.add_argument("--max-prompts", type=int, default=None)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
+    parser.add_argument("--model-revision", default=None)
+    parser.add_argument("--tokenizer-revision", default=None)
+    parser.add_argument("--local-files-only", action="store_true")
+    parser.add_argument("--trust-remote-code", action="store_true")
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--torch-dtype", default=None)
+    parser.add_argument("--metadata-out", default=None, help="Optional provenance JSON path.")
     args = parser.parse_args()
 
-    import torch
-    import transformers
-    import jlens
-
-    device = choose_device(args.device, torch)
-    hf = transformers.AutoModelForCausalLM.from_pretrained(args.model)
-    hf.to(device)
-    hf.eval()
-    tok = transformers.AutoTokenizer.from_pretrained(args.model)
-    model = jlens.from_hf(hf, tok)
-    prompts = load_prompts(Path(args.prompts_jsonl), args.max_prompts)
-    lens = jlens.fit(model, prompts=prompts, checkpoint_path=args.checkpoint_path)
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-    lens.save(args.out)
-    print(args.out)
-    return 0
-
-
-def load_prompts(path: Path, max_prompts: int | None) -> list[str]:
-    prompts: list[str] = []
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            prompts.append(row["text"])
-            if max_prompts is not None and len(prompts) >= max_prompts:
-                break
-    if not prompts:
-        raise ValueError(f"no prompts found in {path}")
-    return prompts
-
-
-def choose_device(requested: str, torch_module) -> str:
-    if requested != "auto":
-        return requested
-    if torch_module.cuda.is_available():
-        return "cuda"
-    if getattr(torch_module.backends, "mps", None) and torch_module.backends.mps.is_available():
-        return "mps"
-    return "cpu"
+    try:
+        deps = load_optional_deps()
+        prompts_path = Path(args.prompts_jsonl)
+        prompts = load_prompt_texts(prompts_path, args.max_prompts)
+        device = choose_device(args.device, deps.torch)
+        set_seed(deps.torch, args.seed)
+        torch_dtype = parse_torch_dtype(args.torch_dtype, deps.torch)
+        model_kwargs = pretrained_kwargs(
+            revision=args.model_revision,
+            local_files_only=args.local_files_only,
+            trust_remote_code=args.trust_remote_code,
+            torch_dtype=torch_dtype,
+        )
+        tokenizer_kwargs = pretrained_kwargs(
+            revision=args.tokenizer_revision or args.model_revision,
+            local_files_only=args.local_files_only,
+            trust_remote_code=args.trust_remote_code,
+        )
+        try:
+            hf = deps.transformers.AutoModelForCausalLM.from_pretrained(args.model, **model_kwargs)
+        except Exception as exc:
+            raise AdapterError(f"model load failed for {args.model!r}: {exc}") from exc
+        try:
+            hf.to(device)
+            hf.eval()
+        except Exception as exc:
+            raise AdapterError(f"model device setup failed on {device!r}: {exc}") from exc
+        try:
+            tok = deps.transformers.AutoTokenizer.from_pretrained(args.model, **tokenizer_kwargs)
+        except Exception as exc:
+            raise AdapterError(f"tokenizer load failed for {args.model!r}: {exc}") from exc
+        model = deps.jlens.from_hf(hf, tok)
+        try:
+            lens = deps.jlens.fit(model, prompts=prompts, checkpoint_path=args.checkpoint_path)
+        except Exception as exc:
+            raise AdapterError(f"lens fit failed: {exc}") from exc
+        target = Path(args.out)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        lens.save(str(target))
+        if args.metadata_out:
+            provenance = build_provenance(
+                model=args.model,
+                model_revision=args.model_revision,
+                tokenizer_revision=args.tokenizer_revision,
+                lens_repo=str(target.parent),
+                lens_file=target.name,
+                lens_revision=None,
+                spec_path=None,
+                prompt_count=len(prompts),
+                positions=None,
+                top_k=None,
+                device=device,
+                torch_dtype=args.torch_dtype,
+                local_files_only=args.local_files_only,
+                trust_remote_code=args.trust_remote_code,
+                seed=args.seed,
+                deps=deps,
+            )
+            write_json(Path(args.metadata_out), provenance)
+        print(args.out)
+        return 0
+    except AdapterError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
