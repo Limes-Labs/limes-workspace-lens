@@ -103,6 +103,8 @@ Only compare reports generated with compatible settings:
 - same position policy;
 - comparable lens fit procedure.
 
+The CLI fails closed when key settings differ. Use `--allow-incompatible` only for diagnostic inspection, and the generated comparison will record the incompatibilities.
+
 ## Artifact Manifest
 
 Schema: `limes-workspace-lens/artifact-manifest.v0.1`

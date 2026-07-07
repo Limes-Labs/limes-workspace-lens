@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 from .analysis import render_markdown_report, score_readouts
-from .comparison import compare_reports, render_markdown_comparison
+from .comparison import compare_reports, compatibility_errors, render_markdown_comparison
 from .examples import example_spec
 from .intervention import build_intervention_plan
 from .manifest import build_manifest, parse_metadata, validate_manifest
@@ -15,6 +15,7 @@ from .schema import (
     load_json,
     validate_audit_spec,
     validate_readouts,
+    validate_report,
     write_json,
     write_jsonl,
 )
@@ -46,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
     summarize.add_argument("--spec", required=True)
     summarize.add_argument("--out", required=True, help="Markdown report path.")
     summarize.add_argument("--json-out", required=True, help="Machine-readable report path.")
-    summarize.add_argument("--top-k", type=int, default=10)
+    summarize.add_argument("--top-k", type=positive_int, default=10)
 
     reflection = subparsers.add_parser(
         "build-reflection-data",
@@ -69,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     compare.add_argument("--after", required=True)
     compare.add_argument("--out", required=True, help="Markdown comparison path.")
     compare.add_argument("--json-out", required=True, help="Machine-readable comparison path.")
+    compare.add_argument("--allow-incompatible", action="store_true")
 
     build_manifest_parser = subparsers.add_parser(
         "build-manifest", help="Build a SHA256 artifact manifest."
@@ -144,7 +146,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "compare-reports":
             before = load_json(args.before)
             after = load_json(args.after)
-            comparison = compare_reports(before, after)
+            before_errors = [f"before: {error}" for error in validate_report(before)]
+            after_errors = [f"after: {error}" for error in validate_report(after)]
+            ensure_valid(before_errors + after_errors)
+            errors = compatibility_errors(before, after)
+            if errors and not args.allow_incompatible:
+                ensure_valid(errors)
+            comparison = compare_reports(
+                before,
+                after,
+                compatibility_errors=errors,
+                allow_incompatible=args.allow_incompatible,
+            )
             write_json(args.json_out, comparison)
             Path(args.out).parent.mkdir(parents=True, exist_ok=True)
             Path(args.out).write_text(render_markdown_comparison(comparison), encoding="utf-8")
@@ -173,6 +186,16 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.error(f"unknown command {args.command}")
     return 2
+
+
+def positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{value!r} is not an integer") from exc
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be a positive integer")
+    return parsed
 
 
 if __name__ == "__main__":
