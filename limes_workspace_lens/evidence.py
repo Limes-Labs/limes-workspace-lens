@@ -228,7 +228,11 @@ def _validate_artifacts(
         artifacts[artifact_id] = artifact
         artifact_kinds.setdefault(str(kind), set()).add(artifact_id)
 
-        artifact_path = _resolve_artifact_path(root, artifact)
+        try:
+            artifact_path = _resolve_artifact_path(root, artifact)
+        except ValueError as exc:
+            errors.append(f"{where}.path: {exc}")
+            continue
         if artifact_path is None:
             continue
         if not artifact_path.exists():
@@ -770,7 +774,12 @@ def _resolve_artifact_path(root: Path | None, artifact: dict[str, Any]) -> Path 
     path = artifact.get("path")
     if root is None or not _safe_relative_path(path):
         return None
-    return (root / str(path)).resolve()
+    candidate = (root / str(path)).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"{path!r} escapes artifact root") from exc
+    return candidate
 
 
 def _json_like_artifact(kind: str, path: Path) -> bool:

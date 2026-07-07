@@ -271,7 +271,7 @@ Artifact records require:
 - `schema_version`
 - `required_for_status`
 
-For `mixed`, `negative`, and `verified` bundles, `--strict` must be used so the validator can load referenced files and check behavior/control coverage. For `verified` bundles, every artifact required for the status must include `sha256`; behavior/control rows must pass; and validation checks paths, hashes, non-synthetic readouts, prompt coverage, and compatibility objects.
+For `mixed`, `negative`, and `verified` bundles, `--strict` must be used so the validator can load referenced files and check behavior/control coverage. Strict validation resolves artifact paths under `--root` and rejects symlinks or relative paths that escape that root. For `verified` bundles, every artifact required for the status must include `sha256`; behavior/control rows must pass; and validation checks paths, hashes, non-synthetic readouts, prompt coverage, and compatibility objects.
 
 Recommended artifact `kind` values:
 

@@ -140,6 +140,27 @@ class EvidenceBundleTests(unittest.TestCase):
             errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
         self.assertTrue(any("referenced path does not exist" in error for error in errors))
 
+    def test_strict_mode_rejects_symlink_escape_from_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            tmp_path = Path(tmp)
+            outside_path = Path(outside)
+            bundle = build_bundle(tmp_path, status="diagnostic", synthetic=True)
+            external_report = outside_path / "external-report.json"
+            external_report.write_text(
+                (tmp_path / "report.json").read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            escaped_link = tmp_path / "escaped-report.json"
+            try:
+                escaped_link.symlink_to(external_report)
+            except OSError as exc:
+                self.skipTest(f"symlinks are not available: {exc}")
+            for artifact_row in bundle["artifacts"]:
+                if artifact_row["id"] == "report":
+                    artifact_row["path"] = "escaped-report.json"
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("escapes artifact root" in error for error in errors))
+
     def test_verified_bundle_requires_preserved_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
