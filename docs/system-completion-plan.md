@@ -50,6 +50,7 @@ This is now a useful artifact-contract and audit-card workbench, but it is not y
 - [x] Runnable `behavior-eval.v0.1` and `control-eval.v0.1` artifact generators from saved output JSONL.
 - [x] Strict behavior/control validators with prompt coverage, compatibility checks, and evidence-bundle integration.
 - [x] Package build, sdist/wheel install checks, console-script smoke outside the repo root, and Python 3.11/3.12 CI.
+- [x] Evidence-bundle strict mode rejects artifact symlink escapes outside the declared root.
 
 ### Remaining
 
@@ -57,7 +58,7 @@ This is now a useful artifact-contract and audit-card workbench, but it is not y
 - [ ] Executable intervention runtime for hookable toy modules before model-scale intervention claims.
 - [ ] Tokenizer-aware term mapping and lens-fit diagnostics.
 - [ ] Manual/canary real-model adapter workflow against a pinned tiny public checkpoint.
-- [ ] Security/reproducibility hardening for secret/path linting, symlink escape checks, and command-log redaction.
+- [ ] Security/reproducibility hardening for secret/path linting, command-log redaction, and trust-boundary warnings.
 - [ ] Release-bundle automation with source archive, wheel/sdist, artifact README, and SHA256 sums.
 - [ ] Limes integration adapters for AutoResearch, EuroBench subsets, and `limes-nanogpt` checkpoints.
 - [ ] Static offline review visualization and schema registry/golden fixtures.
@@ -110,7 +111,7 @@ Exact decoded-token string matching is useful for fixtures, but too brittle for 
 
 Required:
 
-- Add `SECURITY.md`, artifact secret/path linter, command-log redaction rules, and symlink escape tests.
+- Add `SECURITY.md`, artifact secret/path linter, command-log redaction rules, and trust-boundary warnings.
 - Keep `trust_remote_code` and model-download risks explicit.
 - Add release-bundle automation with source archive, wheel/sdist, artifact README, and SHA256 sums.
 
