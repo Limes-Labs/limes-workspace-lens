@@ -22,6 +22,7 @@ Prefer:
 - "The audit card surfaces token-aligned workspace readouts."
 - "This is a hypothesis-generation signal."
 - "The readout changed after post-training under this prompt suite."
+- "The tokenizer term map makes matching less brittle for this tokenizer revision."
 - "The gradient-attribution artifact identifies input-token contributions to a selected target logit."
 - "The intervention plan needs behavior controls before interpretation."
 - "This result is synthetic, diagnostic, mixed, negative, or verified."

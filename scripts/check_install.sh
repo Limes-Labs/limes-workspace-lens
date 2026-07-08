@@ -40,6 +40,8 @@ install_and_smoke() {
   "${venv_dir}/bin/limes-workspace-lens" validate-compute-manifest --help >/dev/null
   "${venv_dir}/bin/limes-workspace-lens" validate-lens-artifact --help >/dev/null
   "${venv_dir}/bin/limes-workspace-lens" validate-gradient-attribution --help >/dev/null
+  "${venv_dir}/bin/limes-workspace-lens" validate-tokenizer-term-map --help >/dev/null
+  "${venv_dir}/bin/limes-workspace-lens" build-tokenizer-term-map --help >/dev/null
   "${venv_dir}/bin/limes-workspace-lens" init-spec --out spec.json
   "${venv_dir}/bin/limes-workspace-lens" validate-spec spec.json
   "${venv_dir}/bin/limes-workspace-lens" export-prompts spec.json --out prompts.jsonl
@@ -47,6 +49,46 @@ install_and_smoke() {
   "${venv_dir}/bin/python" - <<'PY'
 import json
 import pathlib
+
+from limes_workspace_lens.tokenizer_terms import build_tokenizer_term_map
+
+
+class SmokeTokenizer:
+    vocab = {
+        "fake": [201],
+        " fake": [202],
+        "prompt": [211],
+        " prompt": [212],
+        "injection": [221],
+        " injection": [222],
+        "49": [301],
+        " 49": [302],
+        "Spanish": [401],
+        " Spanish": [402],
+        "spanish": [401],
+        " spanish": [402],
+    }
+
+    def encode(self, text, add_special_tokens=False):
+        if text in self.vocab:
+            return list(self.vocab[text])
+        return [900 + index for index, _char in enumerate(text, start=1)]
+
+    def convert_ids_to_tokens(self, token_ids):
+        reverse = {
+            201: "fake",
+            202: " fake",
+            211: "prompt",
+            212: " prompt",
+            221: "injection",
+            222: " injection",
+            301: "49",
+            302: " 49",
+            401: "Spanish",
+            402: " Spanish",
+        }
+        return [reverse.get(token_id, f"<tok:{token_id}>") for token_id in token_ids]
+
 
 root = pathlib.Path(".")
 spec = json.loads((root / "spec.json").read_text(encoding="utf-8"))
@@ -101,11 +143,28 @@ for path, rows in [
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         encoding="utf-8",
     )
+
+term_map = build_tokenizer_term_map(
+    spec,
+    tokenizer=SmokeTokenizer(),
+    model="installed-smoke-tokenizer",
+    tokenizer_revision="installed-smoke-tokenizer",
+    spec_path="spec.json",
+    local_files_only=True,
+    trust_remote_code=False,
+    synthetic=True,
+)
+(root / "tokenizer-term-map.json").write_text(
+    json.dumps(term_map, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
 PY
 
   "${venv_dir}/bin/limes-workspace-lens" validate-readouts readouts.json
+  "${venv_dir}/bin/limes-workspace-lens" validate-tokenizer-term-map tokenizer-term-map.json --spec spec.json
   "${venv_dir}/bin/limes-workspace-lens" summarize-readouts readouts.json \
     --spec spec.json \
+    --term-map tokenizer-term-map.json \
     --out audit-card.md \
     --json-out audit-card.json
   "${venv_dir}/bin/limes-workspace-lens" run-behavior-eval spec.json \
@@ -237,6 +296,7 @@ PY
     behavior-eval.json \
     control-eval.json \
     gradient-attribution.json \
+    tokenizer-term-map.json \
     reflection.jsonl \
     intervention-plan.json \
     --root . \
@@ -257,6 +317,7 @@ for name in [
     "behavior-eval.json",
     "control-eval.json",
     "gradient-attribution.json",
+    "tokenizer-term-map.json",
     "intervention-plan.json",
     "artifact-manifest.json",
 ]:

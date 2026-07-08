@@ -79,8 +79,73 @@ for path, rows in [
         encoding="utf-8",
     )
 PY
+python3 - "${TMP_DIR}" <<'PY'
+import json
+import pathlib
+import sys
+
+from limes_workspace_lens.tokenizer_terms import build_tokenizer_term_map
+
+
+class SmokeTokenizer:
+    vocab = {
+        "fake": [201],
+        " fake": [202],
+        "prompt": [211],
+        " prompt": [212],
+        "injection": [221],
+        " injection": [222],
+        "49": [301],
+        " 49": [302],
+        "Spanish": [401],
+        " Spanish": [402],
+        "spanish": [401],
+        " spanish": [402],
+    }
+
+    def encode(self, text, add_special_tokens=False):
+        if text in self.vocab:
+            return list(self.vocab[text])
+        return [900 + index for index, _char in enumerate(text, start=1)]
+
+    def convert_ids_to_tokens(self, token_ids):
+        reverse = {
+            201: "fake",
+            202: " fake",
+            211: "prompt",
+            212: " prompt",
+            221: "injection",
+            222: " injection",
+            301: "49",
+            302: " 49",
+            401: "Spanish",
+            402: " Spanish",
+        }
+        return [reverse.get(token_id, f"<tok:{token_id}>") for token_id in token_ids]
+
+
+root = pathlib.Path(sys.argv[1])
+spec = json.loads((root / "workspace_audit_spec.json").read_text(encoding="utf-8"))
+term_map = build_tokenizer_term_map(
+    spec,
+    tokenizer=SmokeTokenizer(),
+    model="smoke-tokenizer",
+    tokenizer_revision="synthetic-fixture-tokenizer",
+    spec_path=root / "workspace_audit_spec.json",
+    local_files_only=True,
+    trust_remote_code=False,
+    synthetic=True,
+)
+(root / "tokenizer-term-map.json").write_text(
+    json.dumps(term_map, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+python3 -m limes_workspace_lens validate-tokenizer-term-map "${TMP_DIR}/tokenizer-term-map.json" \
+  --spec "${TMP_DIR}/workspace_audit_spec.json"
 python3 -m limes_workspace_lens summarize-readouts "${TMP_DIR}/synthetic_readouts.json" \
   --spec "${TMP_DIR}/workspace_audit_spec.json" \
+  --term-map "${TMP_DIR}/tokenizer-term-map.json" \
   --out "${TMP_DIR}/audit-card.md" \
   --json-out "${TMP_DIR}/audit-card.json"
 python3 -m limes_workspace_lens run-behavior-eval "${TMP_DIR}/workspace_audit_spec.json" \
@@ -106,6 +171,8 @@ python3 -m limes_workspace_lens validate-behavior-eval "${TMP_DIR}/behavior-eval
   --spec "${TMP_DIR}/workspace_audit_spec.json"
 python3 -m limes_workspace_lens validate-control-eval "${TMP_DIR}/control-eval.json" \
   --spec "${TMP_DIR}/workspace_audit_spec.json"
+python3 -m limes_workspace_lens validate-tokenizer-term-map --help >/dev/null
+python3 -m limes_workspace_lens build-tokenizer-term-map --help >/dev/null
 python3 - "${TMP_DIR}" <<'PY'
 import hashlib
 import json
@@ -284,6 +351,7 @@ python3 -m limes_workspace_lens build-manifest \
   "${TMP_DIR}/prompts.jsonl" \
   "${TMP_DIR}/audit-card.md" \
   "${TMP_DIR}/audit-card.json" \
+  "${TMP_DIR}/tokenizer-term-map.json" \
   "${TMP_DIR}/behavior-eval.json" \
   "${TMP_DIR}/control-eval.json" \
   "${TMP_DIR}/gradient-attribution.json" \
@@ -340,6 +408,13 @@ bundle = {
             "path": "audit-card.json",
             "schema_version": "limes-workspace-lens/report.v0.1",
             "required_for_status": True,
+        },
+        {
+            "id": "tokenizer-term-map",
+            "kind": "tokenizer_term_map",
+            "path": "tokenizer-term-map.json",
+            "schema_version": "limes-workspace-lens/tokenizer-term-map.v0.1",
+            "required_for_status": False,
         },
         {
             "id": "behavior",

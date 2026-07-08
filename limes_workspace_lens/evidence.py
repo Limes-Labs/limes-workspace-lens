@@ -18,6 +18,7 @@ from .schema import (
     LENS_ARTIFACT_SCHEMA,
     READOUT_SCHEMA,
     REPORT_SCHEMA,
+    TOKENIZER_TERM_MAP_SCHEMA,
     require_keys,
     validate_behavior_eval,
     validate_audit_spec,
@@ -28,6 +29,7 @@ from .schema import (
     validate_lens_artifact,
     validate_readouts,
     validate_report,
+    validate_tokenizer_term_map,
 )
 
 
@@ -57,6 +59,7 @@ KNOWN_ARTIFACT_SCHEMAS = {
     "behavior_eval": BEHAVIOR_EVAL_SCHEMA,
     "control_eval": CONTROL_EVAL_SCHEMA,
     "gradient_attribution": GRADIENT_ATTRIBUTION_SCHEMA,
+    "tokenizer_term_map": TOKENIZER_TERM_MAP_SCHEMA,
     "command_log": COMMAND_LOG_SCHEMA,
     "compute_manifest": COMPUTE_MANIFEST_SCHEMA,
     "lens_artifact_or_revision": LENS_ARTIFACT_SCHEMA,
@@ -158,7 +161,14 @@ def validate_evidence_bundle(
             )
         )
     if isinstance(compatibility, dict):
-        errors.extend(_validate_loaded_compatibility(compatibility, loaded_artifacts))
+        errors.extend(
+            _validate_loaded_compatibility(
+                compatibility,
+                artifacts,
+                loaded_artifacts,
+                artifact_hashes,
+            )
+        )
 
     return errors
 
@@ -638,7 +648,10 @@ def _validate_status_rules(
 
 
 def _validate_loaded_compatibility(
-    compatibility: dict[str, Any], loaded_artifacts: dict[str, dict[str, Any]]
+    compatibility: dict[str, Any],
+    artifacts: dict[str, dict[str, Any]],
+    loaded_artifacts: dict[str, dict[str, Any]],
+    artifact_hashes: dict[str, str],
 ) -> list[str]:
     errors: list[str] = []
     for artifact_id, artifact in loaded_artifacts.items():
@@ -701,7 +714,118 @@ def _validate_loaded_compatibility(
                 f"artifact {artifact_id}.top_k",
                 errors,
             )
+    errors.extend(
+        _validate_tokenizer_term_map_bindings(
+            compatibility,
+            artifacts,
+            loaded_artifacts,
+            artifact_hashes,
+        )
+    )
     return errors
+
+
+def _validate_tokenizer_term_map_bindings(
+    compatibility: dict[str, Any],
+    artifacts: dict[str, dict[str, Any]],
+    loaded_artifacts: dict[str, dict[str, Any]],
+    artifact_hashes: dict[str, str],
+) -> list[str]:
+    errors: list[str] = []
+    term_map_ids = [
+        artifact_id
+        for artifact_id, artifact in loaded_artifacts.items()
+        if artifact.get("schema_version") == TOKENIZER_TERM_MAP_SCHEMA
+    ]
+
+    referenced_term_map_ids: set[str] = set()
+    for artifact_id in term_map_ids:
+        artifact = loaded_artifacts[artifact_id]
+        tokenizer = artifact.get("tokenizer") if isinstance(artifact.get("tokenizer"), dict) else {}
+        _expect_equal(
+            tokenizer.get("revision"),
+            compatibility.get("tokenizer_revision"),
+            f"artifact {artifact_id}.tokenizer.revision",
+            errors,
+        )
+
+    for report_id, report in loaded_artifacts.items():
+        if report.get("schema_version") != REPORT_SCHEMA:
+            continue
+        input_readouts = report.get("input_readouts")
+        if not isinstance(input_readouts, dict):
+            continue
+        term_map_summary = input_readouts.get("tokenizer_term_map")
+        if term_map_summary is None:
+            continue
+        if not isinstance(term_map_summary, dict):
+            errors.append(f"artifact {report_id}.input_readouts.tokenizer_term_map: must be an object")
+            continue
+        summary_sha256 = term_map_summary.get("sha256")
+        matching_ids = [
+            artifact_id
+            for artifact_id in term_map_ids
+            if _valid_sha256(summary_sha256) and artifact_hashes.get(artifact_id) == summary_sha256
+        ]
+        if not matching_ids:
+            errors.append(
+                f"artifact {report_id}.input_readouts.tokenizer_term_map.sha256: "
+                "must match a tokenizer_term_map artifact in this bundle"
+            )
+            continue
+        term_map_id = matching_ids[0]
+        referenced_term_map_ids.add(term_map_id)
+        _validate_report_term_map_summary_matches_artifact(
+            report_id,
+            term_map_summary,
+            term_map_id,
+            artifacts[term_map_id],
+            loaded_artifacts[term_map_id],
+            errors,
+        )
+
+    for artifact_id in term_map_ids:
+        if artifact_id not in referenced_term_map_ids:
+            errors.append(
+                f"artifact {artifact_id}: tokenizer_term_map artifact is not referenced "
+                "by any report tokenizer_term_map.sha256"
+            )
+    return errors
+
+
+def _validate_report_term_map_summary_matches_artifact(
+    report_id: str,
+    summary: dict[str, Any],
+    term_map_id: str,
+    artifact_row: dict[str, Any],
+    term_map: dict[str, Any],
+    errors: list[str],
+) -> None:
+    tokenizer = term_map.get("tokenizer") if isinstance(term_map.get("tokenizer"), dict) else {}
+    summary_tokenizer = (
+        summary.get("tokenizer") if isinstance(summary.get("tokenizer"), dict) else {}
+    )
+    prefix = f"artifact {report_id}.input_readouts.tokenizer_term_map"
+    _expect_equal(summary.get("source"), term_map.get("source"), f"{prefix}.source", errors)
+    _expect_equal(summary.get("synthetic"), term_map.get("synthetic"), f"{prefix}.synthetic", errors)
+    _expect_equal(
+        summary_tokenizer.get("id"),
+        tokenizer.get("id"),
+        f"{prefix}.tokenizer.id",
+        errors,
+    )
+    _expect_equal(
+        summary_tokenizer.get("revision"),
+        tokenizer.get("revision"),
+        f"{prefix}.tokenizer.revision",
+        errors,
+    )
+    terms = term_map.get("terms")
+    if isinstance(terms, list):
+        _expect_equal(summary.get("term_count"), len(terms), f"{prefix}.term_count", errors)
+    summary_path = summary.get("path")
+    if _safe_relative_path(summary_path) and not _local_path_label(summary_path):
+        _expect_equal(summary_path, artifact_row.get("path"), f"{prefix}.path", errors)
 
 
 def _validate_loaded_eval_artifacts(loaded_artifacts: dict[str, dict[str, Any]]) -> list[str]:
@@ -717,6 +841,11 @@ def _validate_loaded_eval_artifacts(loaded_artifacts: dict[str, dict[str, Any]])
             )
         if schema_version == REPORT_SCHEMA:
             errors.extend(f"artifact {artifact_id}: {error}" for error in validate_report(artifact))
+        if schema_version == TOKENIZER_TERM_MAP_SCHEMA:
+            errors.extend(
+                f"artifact {artifact_id}: {error}"
+                for error in validate_tokenizer_term_map(artifact, spec)
+            )
         if schema_version == BEHAVIOR_EVAL_SCHEMA:
             errors.extend(
                 f"artifact {artifact_id}: {error}" for error in validate_behavior_eval(artifact, spec)
@@ -983,6 +1112,10 @@ def _safe_relative_path(path: Any) -> bool:
         return False
     pure = PurePosixPath(str(path))
     return not pure.is_absolute() and ".." not in pure.parts
+
+
+def _local_path_label(path: Any) -> bool:
+    return isinstance(path, str) and path.startswith("<local:") and path.endswith(">")
 
 
 def _load_json_object(path: Path) -> dict[str, Any]:

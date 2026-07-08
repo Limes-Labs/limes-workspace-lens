@@ -23,9 +23,11 @@ from limes_workspace_lens.schema import (
     GRADIENT_ATTRIBUTION_SCHEMA,
     READOUT_SCHEMA,
     REPORT_SCHEMA,
+    TOKENIZER_TERM_MAP_SCHEMA,
     load_json,
     validate_command_log,
 )
+from limes_workspace_lens.tokenizer_terms import build_tokenizer_term_map
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,6 +124,55 @@ class EvidenceBundleTests(unittest.TestCase):
             add_gradient_artifact(tmp_path, bundle, prompt_id="math-copy")
             errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
         self.assertEqual([], errors)
+
+    def test_diagnostic_bundle_accepts_optional_tokenizer_term_map_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="diagnostic", synthetic=True)
+            add_tokenizer_term_map_artifact(tmp_path, bundle)
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertEqual([], errors)
+
+    def test_strict_bundle_validates_loaded_tokenizer_term_map_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="diagnostic", synthetic=True)
+            term_map = add_tokenizer_term_map_artifact(tmp_path, bundle)
+            term_map["terms"][0]["variants"][0]["token_ids"] = [-1]
+            write_json(tmp_path / "tokenizer-term-map.json", term_map)
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("artifact tokenizer-term-map" in error for error in errors))
+        self.assertTrue(any("token_ids" in error for error in errors))
+
+    def test_strict_bundle_rejects_tokenizer_term_map_revision_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="diagnostic", synthetic=True)
+            term_map = add_tokenizer_term_map_artifact(tmp_path, bundle)
+            term_map["tokenizer"]["revision"] = "wrong-tokenizer-revision"
+            write_json(tmp_path / "tokenizer-term-map.json", term_map)
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("artifact tokenizer-term-map.tokenizer.revision" in error for error in errors))
+
+    def test_strict_bundle_rejects_report_term_map_without_matching_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            bundle = build_bundle(tmp_path, status="diagnostic", synthetic=True)
+            report = load_json(tmp_path / "report.json")
+            report["input_readouts"]["tokenizer_term_map"] = {
+                "source": "hf-tokenizer-term-map:missing-tokenizer",
+                "synthetic": True,
+                "path": "tokenizer-term-map.json",
+                "sha256": "a" * 64,
+                "tokenizer": {
+                    "id": "missing-tokenizer",
+                    "revision": bundle["compatibility"]["tokenizer_revision"],
+                },
+                "term_count": 1,
+            }
+            write_json(tmp_path / "report.json", report)
+            errors = validate_evidence_bundle(bundle, root=tmp_path, strict=True)
+        self.assertTrue(any("must match a tokenizer_term_map artifact" in error for error in errors))
 
     def test_diagnostic_bundle_accepts_runner_built_gradient_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -763,6 +814,40 @@ def add_gradient_row(bundle: dict[str, Any], *, kind: str = "gradient_attributio
     bundle["pairings"][0]["gradient_attribution_artifact_ids"] = ["gradient"]
 
 
+def add_tokenizer_term_map_artifact(root: Path, bundle: dict[str, Any]) -> dict[str, Any]:
+    spec = load_json(root / "spec.json")
+    readouts = load_json(root / "readouts.json")
+    term_map = build_tokenizer_term_map(
+        spec,
+        tokenizer=TinyTermTokenizer(),
+        model="fixture-tokenizer",
+        tokenizer_revision=bundle["compatibility"]["tokenizer_revision"],
+        spec_path="spec.json",
+        local_files_only=True,
+        trust_remote_code=False,
+        synthetic=True,
+    )
+    write_json(root / "tokenizer-term-map.json", term_map)
+    report = score_readouts(
+        spec,
+        readouts,
+        term_map=term_map,
+        term_map_path="tokenizer-term-map.json",
+        term_map_sha256=sha256(root / "tokenizer-term-map.json"),
+    )
+    write_json(root / "report.json", report)
+    bundle["artifacts"].append(
+        {
+            "id": "tokenizer-term-map",
+            "kind": "tokenizer_term_map",
+            "path": "tokenizer-term-map.json",
+            "schema_version": TOKENIZER_TERM_MAP_SCHEMA,
+            "required_for_status": False,
+        }
+    )
+    return term_map
+
+
 def gradient_attribution(
     compatibility: dict[str, Any],
     *,
@@ -993,6 +1078,43 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class TinyTermTokenizer:
+    vocab = {
+        "fake": [201],
+        " fake": [202],
+        "prompt": [211],
+        " prompt": [212],
+        "injection": [221],
+        " injection": [222],
+        "49": [301],
+        " 49": [302],
+        "Spanish": [401],
+        " Spanish": [402],
+        "spanish": [401],
+        " spanish": [402],
+    }
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        if text in self.vocab:
+            return list(self.vocab[text])
+        return [900 + index for index, _char in enumerate(text, start=1)]
+
+    def convert_ids_to_tokens(self, token_ids: list[int]) -> list[str]:
+        reverse = {
+            201: "fake",
+            202: " fake",
+            211: "prompt",
+            212: " prompt",
+            221: "injection",
+            222: " injection",
+            301: "49",
+            302: " 49",
+            401: "Spanish",
+            402: " Spanish",
+        }
+        return [reverse.get(token_id, f"<tok:{token_id}>") for token_id in token_ids]
 
 
 if __name__ == "__main__":

@@ -9,9 +9,10 @@ The target workflow is checkpoint comparison:
 1. Choose a base checkpoint and one or more changed checkpoints.
 2. Fit or load compatible Jacobian lenses.
 3. Apply the same prompt suite, layer window, positions, tokenizer, and top-k window.
-4. Generate one audit card per checkpoint.
-5. Generate one comparison card per before/after pair.
-6. Review readout changes alongside behavior metrics and intervention controls.
+4. Build a tokenizer term map for the exact tokenizer revision.
+5. Generate one audit card per checkpoint using the same term map.
+6. Generate one comparison card per before/after pair.
+7. Review readout changes alongside behavior metrics and intervention controls.
 
 The output is an audit card, not a leaderboard score.
 
@@ -23,6 +24,7 @@ For each checkpoint, preserve:
 - prompt export JSONL;
 - fitted lens artifact or lens repository revision;
 - model checkpoint revision and tokenizer revision;
+- tokenizer-term-map artifact for the audit vocabulary;
 - readout JSON in the Limes schema;
 - Markdown audit card;
 - machine-readable audit report JSON;
