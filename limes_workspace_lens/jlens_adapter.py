@@ -26,8 +26,24 @@ class ModelDeps:
 
 
 @dataclass(frozen=True)
+class TokenizerDeps:
+    transformers: ModuleType
+
+
+@dataclass(frozen=True)
 class OptionalDeps(ModelDeps):
     jlens: ModuleType
+
+
+def load_tokenizer_deps() -> TokenizerDeps:
+    try:
+        transformers = importlib.import_module("transformers")
+    except ImportError as exc:
+        raise AdapterError(
+            "missing optional tokenizer dependency: transformers. Install the package "
+            "with the real-model extra, for example `python3 -m pip install '.[real-model]'`."
+        ) from exc
+    return TokenizerDeps(transformers=transformers)
 
 
 def load_model_deps() -> ModelDeps:

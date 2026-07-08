@@ -161,6 +161,16 @@ def compatibility_errors(before: dict[str, Any], after: dict[str, Any]) -> list[
             "input_readouts.synthetic differs: "
             f"before={before_readouts.get('synthetic')!r}, after={after_readouts.get('synthetic')!r}"
         )
+    before_term_map = before_readouts.get("tokenizer_term_map")
+    after_term_map = after_readouts.get("tokenizer_term_map")
+    before_term_map_identity = _term_map_identity(before_term_map)
+    after_term_map_identity = _term_map_identity(after_term_map)
+    if before_term_map_identity != after_term_map_identity:
+        errors.append(
+            "input_readouts.tokenizer_term_map differs: "
+            f"before={before_term_map_identity!r}, "
+            f"after={after_term_map_identity!r}"
+        )
     return errors
 
 
@@ -187,3 +197,17 @@ def _compatibility_status(errors: list[str], allow_incompatible: bool) -> str:
     if allow_incompatible:
         return "incompatible-allowed"
     return "incompatible"
+
+
+def _term_map_identity(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    tokenizer = value.get("tokenizer") if isinstance(value.get("tokenizer"), dict) else {}
+    return {
+        "source": value.get("source"),
+        "sha256": value.get("sha256"),
+        "tokenizer": {
+            "id": tokenizer.get("id"),
+            "revision": tokenizer.get("revision"),
+        },
+    }

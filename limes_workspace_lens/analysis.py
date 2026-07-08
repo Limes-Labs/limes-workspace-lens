@@ -1,14 +1,15 @@
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
-from .schema import REPORT_SCHEMA
+from .schema import REPORT_SCHEMA, public_artifact_path_label
+from .tokenizer_terms import TermMatcher, build_match_index
 
 
 def normalize_token(token: str) -> str:
-    return token.strip().lower()
+    return token.strip().casefold()
 
 
 def score_readouts(
@@ -16,15 +17,13 @@ def score_readouts(
     readouts: dict[str, Any],
     *,
     top_k: int = 10,
+    term_map: dict[str, Any] | None = None,
+    term_map_path: str | None = None,
+    term_map_sha256: str | None = None,
 ) -> dict[str, Any]:
-    audit_terms = {
-        category: {normalize_token(term) for term in terms}
-        for category, terms in spec.get("audit_terms", {}).items()
-    }
-    prompt_expected = {
-        prompt["id"]: {normalize_token(term) for term in prompt.get("expected_workspace_terms", [])}
-        for prompt in spec.get("prompts", [])
-    }
+    match_index = build_match_index(term_map) if term_map is not None else None
+    audit_terms = _audit_term_matchers(spec, match_index)
+    prompt_expected = _expected_term_matchers(spec, match_index)
 
     category_counts: Counter[str] = Counter()
     expected_counts: Counter[str] = Counter()
@@ -36,22 +35,15 @@ def score_readouts(
         prompt_id = row["prompt_id"]
         layer = row["layer"]
         tokens = row.get("top_tokens", [])[:top_k]
-        normalized = [normalize_token(token["token"]) for token in tokens]
-        ranks = {
-            normalize_token(token["token"]): token.get("rank")
-            for token in tokens
-            if isinstance(token.get("token"), str)
-        }
-
         matched_categories: list[str] = []
-        for category, terms in audit_terms.items():
-            matched_terms = sorted(set(normalized) & terms)
+        for category, matchers in audit_terms.items():
+            matched_terms = _match_terms(tokens, matchers)
             if matched_terms:
                 matched_categories.append(category)
                 category_counts[category] += len(matched_terms)
                 layer_counts[layer] += len(matched_terms)
                 prompt_counts[prompt_id] += len(matched_terms)
-                for term in matched_terms:
+                for term, match in sorted(matched_terms.items()):
                     hits.append(
                         {
                             "prompt_id": prompt_id,
@@ -59,15 +51,18 @@ def score_readouts(
                             "layer": layer,
                             "category": category,
                             "term": term,
-                            "rank": ranks.get(term),
+                            "rank": match.get("rank"),
+                            "match_kind": match.get("match_kind"),
+                            "matched_token": match.get("matched_token"),
+                            "token_id": match.get("token_id"),
                         }
                     )
 
-        expected_terms = prompt_expected.get(prompt_id, set())
-        expected_matched = sorted(set(normalized) & expected_terms)
+        expected_terms = prompt_expected.get(prompt_id, [])
+        expected_matched = _match_terms(tokens, expected_terms)
         if expected_matched:
             expected_counts[prompt_id] += len(expected_matched)
-            for term in expected_matched:
+            for term, match in sorted(expected_matched.items()):
                 hits.append(
                     {
                         "prompt_id": prompt_id,
@@ -75,7 +70,10 @@ def score_readouts(
                         "layer": layer,
                         "category": "expected_workspace_term",
                         "term": term,
-                        "rank": ranks.get(term),
+                        "rank": match.get("rank"),
+                        "match_kind": match.get("match_kind"),
+                        "matched_token": match.get("matched_token"),
+                        "token_id": match.get("token_id"),
                     }
                 )
 
@@ -95,6 +93,11 @@ def score_readouts(
             "source": readouts.get("source", "unknown"),
             "synthetic": bool(readouts.get("synthetic", False)),
             "row_count": len(readouts.get("readouts", [])),
+            "tokenizer_term_map": _term_map_summary(
+                term_map,
+                path=term_map_path,
+                sha256=term_map_sha256,
+            ),
         },
         "top_k": top_k,
         "category_counts": dict(sorted(category_counts.items())),
@@ -102,6 +105,105 @@ def score_readouts(
         "layer_summaries": layer_rows,
         "hits": hits,
         "interpretation": _interpretation(readouts, category_counts, expected_counts),
+    }
+
+
+def _audit_term_matchers(
+    spec: dict[str, Any],
+    match_index: dict[str, dict[str, list[TermMatcher]]] | None,
+) -> dict[str, list[TermMatcher]]:
+    if match_index is not None:
+        return match_index.get("audit_terms", {})
+    return {
+        category: [
+            TermMatcher(
+                term=term,
+                normalized=normalize_token(term),
+                token_ids=frozenset(),
+                normalized_variants=frozenset({normalize_token(term)}),
+            )
+            for term in terms
+        ]
+        for category, terms in spec.get("audit_terms", {}).items()
+    }
+
+
+def _expected_term_matchers(
+    spec: dict[str, Any],
+    match_index: dict[str, dict[str, list[TermMatcher]]] | None,
+) -> dict[str, list[TermMatcher]]:
+    if match_index is not None:
+        return match_index.get("expected_workspace_terms", {})
+    return {
+        prompt["id"]: [
+            TermMatcher(
+                term=term,
+                normalized=normalize_token(term),
+                token_ids=frozenset(),
+                normalized_variants=frozenset({normalize_token(term)}),
+            )
+            for term in prompt.get("expected_workspace_terms", [])
+        ]
+        for prompt in spec.get("prompts", [])
+    }
+
+
+def _match_terms(
+    tokens: list[dict[str, Any]],
+    matchers: list[TermMatcher],
+) -> dict[str, dict[str, Any]]:
+    matches: dict[str, dict[str, Any]] = {}
+    for token in tokens:
+        if not isinstance(token, dict) or not isinstance(token.get("token"), str):
+            continue
+        token_id = token.get("token_id")
+        token_id = token_id if isinstance(token_id, int) and not isinstance(token_id, bool) else None
+        token_text = token["token"]
+        rank = token.get("rank")
+        for matcher in matchers:
+            match_kind = matcher.match(token=token_text, token_id=token_id)
+            if match_kind is None:
+                continue
+            current = matches.get(matcher.normalized)
+            current_rank = current.get("rank") if isinstance(current, dict) else None
+            if current is None or _rank_is_better(rank, current_rank):
+                matches[matcher.normalized] = {
+                    "term": matcher.term,
+                    "rank": rank,
+                    "match_kind": match_kind,
+                    "matched_token": token_text,
+                    "token_id": token_id,
+                }
+    return matches
+
+
+def _rank_is_better(rank: Any, current_rank: Any) -> bool:
+    if isinstance(rank, int) and not isinstance(rank, bool):
+        if isinstance(current_rank, int) and not isinstance(current_rank, bool):
+            return rank < current_rank
+        return True
+    return current_rank is None
+
+
+def _term_map_summary(
+    term_map: dict[str, Any] | None,
+    *,
+    path: str | None,
+    sha256: str | None,
+) -> dict[str, Any] | None:
+    if term_map is None:
+        return None
+    tokenizer = term_map.get("tokenizer") if isinstance(term_map.get("tokenizer"), dict) else {}
+    return {
+        "source": term_map.get("source"),
+        "synthetic": term_map.get("synthetic"),
+        "path": public_artifact_path_label(path) if path else None,
+        "sha256": sha256,
+        "tokenizer": {
+            "id": tokenizer.get("id"),
+            "revision": tokenizer.get("revision"),
+        },
+        "term_count": len(term_map.get("terms", [])) if isinstance(term_map.get("terms"), list) else 0,
     }
 
 

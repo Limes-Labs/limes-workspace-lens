@@ -34,7 +34,7 @@ The v0.1 repository now has:
 - README, non-claims, trainer workflow, and roadmap docs;
 - CI, integrated smoke tests, and installed-package smoke tests.
 
-This is now a useful artifact-contract and audit-card workbench with an initial real PyTorch gradient-attribution runner, but it is not yet a complete production-quality Jacobian-lens audit tool because it still lacks real open-weight evidence, executable interventions, tokenizer-aware diagnostics, and release/integration hardening.
+This is now a useful artifact-contract and audit-card workbench with an initial real PyTorch gradient-attribution runner and tokenizer-aware term maps, but it is not yet a complete production-quality Jacobian-lens audit tool because it still lacks real open-weight evidence, executable interventions, lens-fit diagnostics, and release/integration hardening.
 
 ## Live Todo
 
@@ -57,12 +57,13 @@ This is now a useful artifact-contract and audit-card workbench with an initial 
 - [x] Gradient-attribution artifact contract with CLI validation, strict evidence-bundle pairing, smoke coverage, documentation, and public metadata hygiene.
 - [x] Optional Hugging Face causal-LM gradient-attribution runner for selected readout-token targets using real PyTorch `gradient_x_activation` over input embeddings.
 - [x] Readout exporter records tokenizer `token_id` values for robust downstream target mapping.
+- [x] Tokenizer-term-map artifact, CLI builder/validator, and token-id-aware report scoring for audit terms.
 
 ### Remaining
 
 - [ ] One real open-weight replication pack with `synthetic=false` readouts, behavior artifacts, controls, manifests, command logs, compute manifest, and evidence bundle.
 - [ ] Executable intervention runtime for hookable toy modules before model-scale intervention claims.
-- [ ] Tokenizer-aware term mapping and lens-fit diagnostics.
+- [ ] Lens-fit diagnostics beyond adapter provenance, including held-out checks and fit-quality gates.
 - [ ] Manual/canary real-model workflow against a pinned tiny public checkpoint, including fit, readout export, gradient attribution, strict bundle validation, and saved command logs.
 - [ ] Release-bundle automation with source archive, wheel/sdist, artifact README, and SHA256 sums.
 - [ ] Limes integration adapters for AutoResearch, EuroBench subsets, and `limes-nanogpt` checkpoints.
@@ -107,18 +108,16 @@ Why it matters:
 
 The strongest evidence in the source literature is causal. The repo should eventually support causal tests, not only readout inspection.
 
-### 3. Tokenizer-Aware Term Mapping And Lens-Fit Diagnostics
+### 3. Lens-Fit Diagnostics
 
 Required:
 
-- Tokenizer-aware aliases for leading-space, BPE, split-token, casing, and Unicode variants.
-- Multi-token concept matching for audit vocabularies.
 - Lens-fit diagnostic artifact recording fit corpus, held-out checks, seed, layer policy, and ablations.
 - Validation that model-family claims require fit-quality evidence.
 
 Why it matters:
 
-Exact decoded-token string matching is useful for fixtures, but too brittle for serious tokenizer-dependent claims.
+Tokenizer term maps now make decoded-token matching less brittle, but a real model claim still needs evidence that the fitted lens is stable enough to interpret.
 
 ### 4. Packaging, Security, And Reproducibility Hardening
 

@@ -16,6 +16,7 @@ BEHAVIOR_EVAL_SCHEMA = "limes-workspace-lens/behavior-eval.v0.1"
 CONTROL_EVAL_SCHEMA = "limes-workspace-lens/control-eval.v0.1"
 CONTROL_EVAL_KINDS = {"random_direction", "neutral_token", "no_op", "prompt_variant"}
 GRADIENT_ATTRIBUTION_SCHEMA = "limes-workspace-lens/gradient-attribution.v0.1"
+TOKENIZER_TERM_MAP_SCHEMA = "limes-workspace-lens/tokenizer-term-map.v0.1"
 GRADIENT_ATTRIBUTION_OPERATORS = {
     "attention_gradient",
     "gradient_x_activation",
@@ -346,6 +347,11 @@ def validate_report(report: dict[str, Any]) -> list[str]:
     for key in ["project", "model", "lens", "input_readouts"]:
         if key in report and not isinstance(report[key], dict):
             errors.append(f"report.{key}: must be an object")
+    input_readouts = report.get("input_readouts")
+    if isinstance(input_readouts, dict):
+        _validate_report_tokenizer_term_map_summary(
+            input_readouts.get("tokenizer_term_map"), errors
+        )
     top_k = report.get("top_k")
     if not isinstance(top_k, int) or isinstance(top_k, bool) or top_k <= 0:
         errors.append("report.top_k: must be a positive integer")
@@ -392,6 +398,46 @@ def validate_report(report: dict[str, Any]) -> list[str]:
     if report_metadata:
         errors.extend(validate_public_artifact_strings(report_metadata, "report.metadata"))
     return errors
+
+
+def _validate_report_tokenizer_term_map_summary(value: Any, errors: list[str]) -> None:
+    if value is None:
+        return
+    where = "report.input_readouts.tokenizer_term_map"
+    if not isinstance(value, dict):
+        errors.append(f"{where}: must be null or an object")
+        return
+    errors.extend(
+        require_keys(
+            value,
+            ["source", "synthetic", "path", "sha256", "tokenizer", "term_count"],
+            where,
+        )
+    )
+    if not isinstance(value.get("source"), str) or not value.get("source", "").strip():
+        errors.append(f"{where}.source: must be a non-empty string")
+    if not isinstance(value.get("synthetic"), bool):
+        errors.append(f"{where}.synthetic: must be a boolean")
+    path = value.get("path")
+    if path is not None and not _safe_relative_path_or_local_label(path):
+        errors.append(f"{where}.path: must be null, a safe relative path, or a local path label")
+    sha256 = value.get("sha256")
+    if sha256 is not None and not _valid_sha256(sha256):
+        errors.append(f"{where}.sha256: must be null or a SHA-256 hex digest")
+    tokenizer = value.get("tokenizer")
+    if not isinstance(tokenizer, dict):
+        errors.append(f"{where}.tokenizer: must be an object")
+    else:
+        errors.extend(require_keys(tokenizer, ["id", "revision"], f"{where}.tokenizer"))
+        if not isinstance(tokenizer.get("id"), str) or not tokenizer.get("id", "").strip():
+            errors.append(f"{where}.tokenizer.id: must be a non-empty string")
+        revision = tokenizer.get("revision")
+        if revision is not None and (
+            not isinstance(revision, str) or not revision.strip()
+        ):
+            errors.append(f"{where}.tokenizer.revision: must be a non-empty string or null")
+    if not _is_non_negative_int(value.get("term_count")):
+        errors.append(f"{where}.term_count: must be a non-negative integer")
 
 
 def validate_behavior_eval(
@@ -565,6 +611,105 @@ def validate_gradient_attribution(
         attribution_top_k,
         errors,
     )
+    return errors
+
+
+def validate_tokenizer_term_map(
+    term_map: dict[str, Any], spec: dict[str, Any] | None = None
+) -> list[str]:
+    errors = require_keys(
+        term_map,
+        [
+            "schema_version",
+            "generated_utc",
+            "source",
+            "synthetic",
+            "tokenizer",
+            "input_spec",
+            "normalization",
+            "generation",
+            "terms",
+        ],
+        "tokenizer_term_map",
+    )
+    if term_map.get("schema_version") != TOKENIZER_TERM_MAP_SCHEMA:
+        errors.append(
+            "tokenizer_term_map: schema_version must be "
+            f"{TOKENIZER_TERM_MAP_SCHEMA!r}, got {term_map.get('schema_version')!r}"
+        )
+    _validate_generated_utc(term_map.get("generated_utc"), "tokenizer_term_map", errors)
+    if not isinstance(term_map.get("source"), str) or not term_map.get("source", "").strip():
+        errors.append("tokenizer_term_map.source: must be a non-empty string")
+    if not isinstance(term_map.get("synthetic"), bool):
+        errors.append("tokenizer_term_map.synthetic: must be a boolean")
+
+    tokenizer = term_map.get("tokenizer")
+    if not isinstance(tokenizer, dict):
+        errors.append("tokenizer_term_map.tokenizer: must be an object")
+    else:
+        errors.extend(require_keys(tokenizer, ["id", "revision"], "tokenizer_term_map.tokenizer"))
+        if not isinstance(tokenizer.get("id"), str) or not tokenizer.get("id", "").strip():
+            errors.append("tokenizer_term_map.tokenizer.id: must be a non-empty string")
+        revision = tokenizer.get("revision")
+        if revision is not None and (
+            not isinstance(revision, str) or not revision.strip()
+        ):
+            errors.append(
+                "tokenizer_term_map.tokenizer.revision: must be a non-empty string or null"
+            )
+
+    input_spec = term_map.get("input_spec")
+    if not isinstance(input_spec, dict):
+        errors.append("tokenizer_term_map.input_spec: must be an object")
+    else:
+        errors.extend(require_keys(input_spec, ["path", "sha256"], "tokenizer_term_map.input_spec"))
+        path = input_spec.get("path")
+        if path is not None and not _safe_relative_path_or_local_label(path):
+            errors.append(
+                "tokenizer_term_map.input_spec.path: must be null, a safe relative path, "
+                "or a local path label"
+            )
+        sha256 = input_spec.get("sha256")
+        if sha256 is not None and not _valid_sha256(sha256):
+            errors.append("tokenizer_term_map.input_spec.sha256: must be null or a SHA-256 hex digest")
+
+    normalization = term_map.get("normalization")
+    if not isinstance(normalization, dict):
+        errors.append("tokenizer_term_map.normalization: must be an object")
+    else:
+        if not isinstance(normalization.get("casefold"), bool):
+            errors.append("tokenizer_term_map.normalization.casefold: must be a boolean")
+        if not isinstance(normalization.get("strip"), bool):
+            errors.append("tokenizer_term_map.normalization.strip: must be a boolean")
+        if not _is_string_list(normalization.get("variant_policy", [])):
+            errors.append("tokenizer_term_map.normalization.variant_policy: must be a list of strings")
+
+    generation = term_map.get("generation")
+    if not isinstance(generation, dict):
+        errors.append("tokenizer_term_map.generation: must be an object")
+    else:
+        errors.extend(
+            require_keys(
+                generation,
+                ["adapter_version", "dependency_profile", "local_files_only", "trust_remote_code"],
+                "tokenizer_term_map.generation",
+            )
+        )
+        for key in ["adapter_version", "dependency_profile"]:
+            if not isinstance(generation.get(key), str) or not generation.get(key, "").strip():
+                errors.append(f"tokenizer_term_map.generation.{key}: must be a non-empty string")
+        for key in ["local_files_only", "trust_remote_code"]:
+            if not isinstance(generation.get(key), bool):
+                errors.append(f"tokenizer_term_map.generation.{key}: must be a boolean")
+
+    _validate_tokenizer_terms(term_map.get("terms"), spec, errors)
+
+    public_metadata = {
+        key: term_map[key]
+        for key in ["source", "tokenizer", "input_spec", "normalization", "generation"]
+        if key in term_map
+    }
+    errors.extend(validate_public_artifact_strings(public_metadata, "tokenizer_term_map"))
     return errors
 
 
@@ -1440,6 +1585,240 @@ def _validate_gradient_quality(
             errors.append(f"{quality_where}.nonzero_total_attribution: must be false when total attribution is zero")
         if not value["nonzero_total_attribution"] and abs_total > 0:
             errors.append(f"{quality_where}.nonzero_total_attribution: must be true when total attribution is non-zero")
+
+
+def _validate_tokenizer_terms(
+    terms: Any,
+    spec: dict[str, Any] | None,
+    errors: list[str],
+) -> None:
+    if not isinstance(terms, list) or not terms:
+        errors.append("tokenizer_term_map.terms: must be a non-empty list")
+        return
+    known_prompt_ids = _prompt_ids(spec)
+    known_categories = set(spec.get("audit_terms", {}).keys()) if isinstance(spec, dict) else set()
+    expected_keys = _expected_tokenizer_term_keys(spec)
+    seen: set[tuple[str, str | None, str | None, str]] = set()
+    for index, row in enumerate(terms):
+        where = f"tokenizer_term_map.terms[{index}]"
+        if not isinstance(row, dict):
+            errors.append(f"{where}: must be an object")
+            continue
+        errors.extend(
+            require_keys(
+                row,
+                [
+                    "scope",
+                    "term",
+                    "normalized",
+                    "variants",
+                    "single_token_token_ids",
+                    "multi_token_variant_count",
+                ],
+                where,
+            )
+        )
+        scope = row.get("scope")
+        if scope not in {"audit_terms", "expected_workspace_terms"}:
+            errors.append(f"{where}.scope: must be 'audit_terms' or 'expected_workspace_terms'")
+        term = row.get("term")
+        if not isinstance(term, str) or not term.strip():
+            errors.append(f"{where}.term: must be a non-empty string")
+            term_key = ""
+        else:
+            term_key = term
+        normalized = row.get("normalized")
+        if not isinstance(normalized, str) or not normalized.strip():
+            errors.append(f"{where}.normalized: must be a non-empty string")
+        elif term_key and normalized != _normalize_tokenizer_text(term_key):
+            errors.append(
+                f"{where}.normalized: must equal normalized term "
+                f"{_normalize_tokenizer_text(term_key)!r}"
+            )
+        category = row.get("category")
+        prompt_id = row.get("prompt_id")
+        if scope == "audit_terms":
+            if not isinstance(category, str) or not category.strip():
+                errors.append(f"{where}.category: audit_terms rows must name a category")
+            elif known_categories and category not in known_categories:
+                errors.append(f"{where}.category: unknown audit category {category!r}")
+            if prompt_id is not None:
+                errors.append(f"{where}.prompt_id: audit_terms rows must not set prompt_id")
+        if scope == "expected_workspace_terms":
+            if not isinstance(prompt_id, str) or not prompt_id.strip():
+                errors.append(f"{where}.prompt_id: expected rows must name a prompt_id")
+            elif known_prompt_ids and prompt_id not in known_prompt_ids:
+                errors.append(f"{where}.prompt_id: unknown prompt id {prompt_id!r}")
+            if category is not None:
+                errors.append(f"{where}.category: expected rows must not set category")
+        dedupe_key = (
+            str(scope),
+            category if isinstance(category, str) else None,
+            prompt_id if isinstance(prompt_id, str) else None,
+            term_key,
+        )
+        if dedupe_key in seen:
+            errors.append(f"{where}: duplicate term mapping {dedupe_key!r}")
+        else:
+            seen.add(dedupe_key)
+        single_token_ids = row.get("single_token_token_ids")
+        _validate_non_negative_int_list(
+            single_token_ids,
+            f"{where}.single_token_token_ids",
+            errors,
+            allow_empty=True,
+        )
+        multi_token_variant_count = row.get("multi_token_variant_count")
+        if not _is_non_negative_int(multi_token_variant_count):
+            errors.append(f"{where}.multi_token_variant_count: must be a non-negative integer")
+        _validate_tokenizer_variants(row.get("variants"), where, errors)
+        if isinstance(row.get("variants"), list):
+            derived_single_token_ids = sorted(
+                {
+                    token_id
+                    for variant in row["variants"]
+                    if isinstance(variant, dict) and variant.get("single_token") is True
+                    for token_id in variant.get("token_ids", [])
+                    if _is_non_negative_int(token_id)
+                }
+            )
+            if (
+                isinstance(single_token_ids, list)
+                and all(_is_non_negative_int(item) for item in single_token_ids)
+                and sorted(single_token_ids) != derived_single_token_ids
+            ):
+                errors.append(
+                    f"{where}.single_token_token_ids: must equal derived single-token "
+                    f"variant token ids {derived_single_token_ids!r}"
+                )
+            derived_multi_count = sum(
+                1
+                for variant in row["variants"]
+                if isinstance(variant, dict) and variant.get("single_token") is False
+            )
+            if (
+                _is_non_negative_int(multi_token_variant_count)
+                and multi_token_variant_count != derived_multi_count
+            ):
+                errors.append(
+                    f"{where}.multi_token_variant_count: must equal derived multi-token "
+                    f"variant count {derived_multi_count}"
+                )
+    if expected_keys:
+        for missing in sorted(expected_keys - seen):
+            errors.append(f"tokenizer_term_map.terms: missing spec term mapping {missing!r}")
+        for extra in sorted(seen - expected_keys):
+            errors.append(f"tokenizer_term_map.terms: term mapping not present in spec {extra!r}")
+
+
+def _expected_tokenizer_term_keys(
+    spec: dict[str, Any] | None,
+) -> set[tuple[str, str | None, str | None, str]]:
+    if not isinstance(spec, dict):
+        return set()
+    expected: set[tuple[str, str | None, str | None, str]] = set()
+    audit_terms = spec.get("audit_terms", {})
+    if isinstance(audit_terms, dict):
+        for category, terms in audit_terms.items():
+            if not isinstance(category, str) or not isinstance(terms, list):
+                continue
+            for term in terms:
+                if isinstance(term, str) and term.strip():
+                    expected.add(("audit_terms", category, None, term))
+    prompts = spec.get("prompts", [])
+    if isinstance(prompts, list):
+        for prompt in prompts:
+            if not isinstance(prompt, dict):
+                continue
+            prompt_id = prompt.get("id")
+            if not isinstance(prompt_id, str) or not prompt_id.strip():
+                continue
+            expected_terms = prompt.get("expected_workspace_terms", [])
+            if not isinstance(expected_terms, list):
+                continue
+            for term in expected_terms:
+                if isinstance(term, str) and term.strip():
+                    expected.add(("expected_workspace_terms", None, prompt_id, term))
+    return expected
+
+
+def _validate_tokenizer_variants(value: Any, where: str, errors: list[str]) -> None:
+    variants_where = f"{where}.variants"
+    if not isinstance(value, list) or not value:
+        errors.append(f"{variants_where}: must be a non-empty list")
+        return
+    seen_kinds: set[str] = set()
+    for index, variant in enumerate(value):
+        item_where = f"{variants_where}[{index}]"
+        if not isinstance(variant, dict):
+            errors.append(f"{item_where}: must be an object")
+            continue
+        errors.extend(
+            require_keys(
+                variant,
+                ["kind", "text", "normalized", "token_ids", "tokens", "single_token"],
+                item_where,
+            )
+        )
+        kind = variant.get("kind")
+        if not isinstance(kind, str) or not kind.strip():
+            errors.append(f"{item_where}.kind: must be a non-empty string")
+        elif kind in seen_kinds:
+            errors.append(f"{item_where}.kind: duplicate variant kind {kind!r}")
+        else:
+            seen_kinds.add(kind)
+        for key in ["text", "normalized"]:
+            if not isinstance(variant.get(key), str) or not variant.get(key, "").strip():
+                errors.append(f"{item_where}.{key}: must be a non-empty string")
+        text = variant.get("text")
+        normalized = variant.get("normalized")
+        if isinstance(text, str) and text.strip() and isinstance(normalized, str) and normalized.strip():
+            expected_normalized = _normalize_tokenizer_text(text)
+            if normalized != expected_normalized:
+                errors.append(
+                    f"{item_where}.normalized: must equal normalized text "
+                    f"{expected_normalized!r}"
+                )
+        token_ids = variant.get("token_ids")
+        _validate_non_negative_int_list(token_ids, f"{item_where}.token_ids", errors)
+        tokens = variant.get("tokens")
+        if not _is_string_list(tokens) or not tokens:
+            errors.append(f"{item_where}.tokens: must be a non-empty list of strings")
+        if isinstance(token_ids, list) and isinstance(tokens, list) and len(token_ids) != len(tokens):
+            errors.append(f"{item_where}.tokens: length must match token_ids")
+        single_token = variant.get("single_token")
+        if not isinstance(single_token, bool):
+            errors.append(f"{item_where}.single_token: must be a boolean")
+        elif isinstance(token_ids, list) and single_token != (len(token_ids) == 1):
+            errors.append(f"{item_where}.single_token: must match whether token_ids has length 1")
+
+
+def _validate_non_negative_int_list(
+    value: Any,
+    where: str,
+    errors: list[str],
+    *,
+    allow_empty: bool = False,
+) -> None:
+    if not isinstance(value, list) or (not value and not allow_empty):
+        errors.append(f"{where}: must be a {'possibly empty ' if allow_empty else ''}list of non-negative integers")
+        return
+    seen: set[int] = set()
+    for index, item in enumerate(value):
+        if not _is_non_negative_int(item):
+            errors.append(f"{where}[{index}]: must be a non-negative integer")
+        elif item in seen:
+            errors.append(f"{where}[{index}]: duplicate token id {item}")
+        else:
+            seen.add(item)
+
+
+def _is_non_negative_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _normalize_tokenizer_text(value: str) -> str:
+    return value.strip().casefold()
 
 
 def _validate_generated_utc(value: Any, where: str, errors: list[str]) -> None:

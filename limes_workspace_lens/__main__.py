@@ -16,6 +16,7 @@ from .eval_artifacts import (
 )
 from .examples import example_spec
 from .intervention import build_intervention_plan
+from .jlens_adapter import AdapterError, load_tokenizer_deps, pretrained_kwargs, sha256_file
 from .manifest import build_manifest, parse_metadata, validate_manifest
 from .reflection import build_reflection_rows
 from .schema import (
@@ -31,9 +32,11 @@ from .schema import (
     validate_audit_spec,
     validate_readouts,
     validate_report,
+    validate_tokenizer_term_map,
     write_json,
     write_jsonl,
 )
+from .tokenizer_terms import build_tokenizer_term_map
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -85,6 +88,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     validate_lens_artifact_parser.add_argument("lens_artifact")
 
+    validate_tokenizer_term_map_parser = subparsers.add_parser(
+        "validate-tokenizer-term-map", help="Validate a tokenizer-term-map artifact."
+    )
+    validate_tokenizer_term_map_parser.add_argument("term_map")
+    validate_tokenizer_term_map_parser.add_argument("--spec")
+
     validate_bundle = subparsers.add_parser(
         "validate-bundle", help="Validate an evidence-bundle artifact."
     )
@@ -113,6 +122,22 @@ def main(argv: list[str] | None = None) -> int:
     summarize.add_argument("--out", required=True, help="Markdown report path.")
     summarize.add_argument("--json-out", required=True, help="Machine-readable report path.")
     summarize.add_argument("--top-k", type=positive_int, default=10)
+    summarize.add_argument(
+        "--term-map",
+        default=None,
+        help="Optional tokenizer-term-map artifact for token-id-aware matching.",
+    )
+
+    term_map = subparsers.add_parser(
+        "build-tokenizer-term-map",
+        help="Build a tokenizer-aware term map from a spec using a real Transformers tokenizer.",
+    )
+    term_map.add_argument("spec")
+    term_map.add_argument("--tokenizer", required=True, help="Hugging Face tokenizer id or local path.")
+    term_map.add_argument("--out", required=True)
+    term_map.add_argument("--tokenizer-revision", default=None)
+    term_map.add_argument("--local-files-only", action="store_true")
+    term_map.add_argument("--trust-remote-code", action="store_true")
 
     reflection = subparsers.add_parser(
         "build-reflection-data",
@@ -239,6 +264,14 @@ def main(argv: list[str] | None = None) -> int:
             ensure_valid(validate_lens_artifact(artifact))
             print(f"valid: {args.lens_artifact}")
             return 0
+        if args.command == "validate-tokenizer-term-map":
+            spec = load_json(args.spec) if args.spec else None
+            if spec is not None:
+                ensure_valid(validate_audit_spec(spec))
+            artifact = load_json(args.term_map)
+            ensure_valid(validate_tokenizer_term_map(artifact, spec))
+            print(f"valid: {args.term_map}")
+            return 0
         if args.command == "validate-bundle":
             bundle = load_json(args.bundle)
             ensure_valid(
@@ -271,10 +304,49 @@ def main(argv: list[str] | None = None) -> int:
             readouts = load_json(args.readouts)
             ensure_valid(validate_audit_spec(spec))
             ensure_valid(validate_readouts(readouts, spec))
-            report = score_readouts(spec, readouts, top_k=args.top_k)
+            term_map_artifact = load_json(args.term_map) if args.term_map else None
+            if term_map_artifact is not None:
+                ensure_valid(validate_tokenizer_term_map(term_map_artifact, spec))
+            report = score_readouts(
+                spec,
+                readouts,
+                top_k=args.top_k,
+                term_map=term_map_artifact,
+                term_map_path=args.term_map,
+                term_map_sha256=sha256_file(Path(args.term_map)) if args.term_map else None,
+            )
             write_json(args.json_out, report)
             Path(args.out).parent.mkdir(parents=True, exist_ok=True)
             Path(args.out).write_text(render_markdown_report(report), encoding="utf-8")
+            print(args.out)
+            return 0
+        if args.command == "build-tokenizer-term-map":
+            spec = load_json(args.spec)
+            ensure_valid(validate_audit_spec(spec))
+            deps = load_tokenizer_deps()
+            tokenizer_kwargs = pretrained_kwargs(
+                revision=args.tokenizer_revision,
+                local_files_only=args.local_files_only,
+                trust_remote_code=args.trust_remote_code,
+            )
+            try:
+                tokenizer = deps.transformers.AutoTokenizer.from_pretrained(
+                    args.tokenizer,
+                    **tokenizer_kwargs,
+                )
+            except Exception as exc:
+                raise AdapterError(f"tokenizer load failed for {args.tokenizer!r}: {exc}") from exc
+            artifact = build_tokenizer_term_map(
+                spec,
+                tokenizer=tokenizer,
+                model=args.tokenizer,
+                tokenizer_revision=args.tokenizer_revision,
+                spec_path=args.spec,
+                local_files_only=args.local_files_only,
+                trust_remote_code=args.trust_remote_code,
+            )
+            ensure_valid(validate_tokenizer_term_map(artifact, spec))
+            write_json(args.out, artifact)
             print(args.out)
             return 0
         if args.command == "build-reflection-data":

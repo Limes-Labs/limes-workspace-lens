@@ -15,6 +15,7 @@ The v0.1 slice is an audit-card and workflow layer. It can already:
 - generate and validate behavior/control artifacts from saved model-output JSONL without loading a model backend;
 - validate gradient-attribution artifacts from external autograd runners and pair them with strict evidence bundles;
 - compute diagnostic `gradient_x_activation` artifacts for selected readout tokens on Hugging Face causal LMs with a real PyTorch autograd runner;
+- build tokenizer-aware term maps so audit readouts can match tokenizer IDs instead of relying only on decoded-token strings;
 - export prompt suites for real lens fitting and application;
 - generate counterfactual-reflection JSONL candidates from a locked spec;
 - generate intervention plans for coordinate swaps or ablations;
@@ -61,6 +62,22 @@ python3 -m limes_workspace_lens summarize-readouts examples/synthetic_readouts.j
   --out runs/workspace-audit-card.md \
   --json-out runs/workspace-audit-card.json
 ```
+
+With a real tokenizer, build a term map first and pass it into scoring:
+
+```bash
+python3 -m limes_workspace_lens build-tokenizer-term-map examples/workspace_audit_spec.json \
+  --tokenizer Qwen/Qwen3-0.6B \
+  --tokenizer-revision <pinned-tokenizer-revision> \
+  --out runs/qwen-small-tokenizer-term-map.json
+python3 -m limes_workspace_lens summarize-readouts runs/qwen-small-readouts.json \
+  --spec examples/workspace_audit_spec.json \
+  --term-map runs/qwen-small-tokenizer-term-map.json \
+  --out runs/qwen-small-audit-card.md \
+  --json-out runs/qwen-small-audit-card.json
+```
+
+The term map records tokenizer IDs and leading-space/casefold variants for configured audit terms. It makes matching less brittle, but it does not turn token hits into behavior or causal claims.
 
 Build behavior and control artifacts from saved outputs:
 
